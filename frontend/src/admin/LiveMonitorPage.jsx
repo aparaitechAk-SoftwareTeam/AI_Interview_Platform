@@ -3,7 +3,21 @@ import { io } from 'socket.io-client';
 import { Activity, User, Clock, AlertTriangle, Monitor, Wifi, Eye, Pause, XCircle, Flag } from 'lucide-react';
 import { interviews } from '../services/api.js';
 
-const SOCKET_URL = 'http://localhost:4000';
+const getSocketUrl = () => {
+  if (import.meta.env.VITE_SOCKET_URL) {
+    return import.meta.env.VITE_SOCKET_URL.replace(/\/+$/, '');
+  }
+  if (import.meta.env.VITE_BACKEND_URL) {
+    const url = import.meta.env.VITE_BACKEND_URL.replace(/\/+$/, '');
+    return url.replace(/\/api\/?$/, '');
+  }
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL.replace(/\/+$/, '').replace(/\/api\/?$/, '');
+  }
+  return 'http://localhost:4000';
+};
+
+const SOCKET_URL = getSocketUrl();
 
 export default function LiveMonitorPage() {
   const [liveEvents, setLiveEvents] = useState([]);

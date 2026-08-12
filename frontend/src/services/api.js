@@ -1,7 +1,18 @@
 import axios from 'axios';
 
+const getApiBaseUrl = () => {
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL.replace(/\/+$/, '');
+  }
+  if (import.meta.env.VITE_BACKEND_URL) {
+    const backendUrl = import.meta.env.VITE_BACKEND_URL.replace(/\/+$/, '');
+    return backendUrl.endsWith('/api') ? backendUrl : `${backendUrl}/api`;
+  }
+  return 'http://localhost:4000/api';
+};
+
 const API = axios.create({
-  baseURL: 'http://localhost:4000/api',
+  baseURL: getApiBaseUrl(),
   timeout: 60000,
 });
 
@@ -39,6 +50,7 @@ export const candidates = {
   retry: (id, reason) => API.post(`/candidates/${id}/retry`, { reason }),
   extend: (id, extensionDays) => API.post(`/candidates/${id}/extend`, { extensionDays }),
   regenerateCode: (id, reason) => API.post(`/candidates/${id}/regenerate-code`, { reason }),
+  getImportTemplate: () => API.get('/candidates/import-template', { responseType: 'blob' }),
   importPreview: (file) => {
     const formData = new FormData();
     formData.append('file', file);

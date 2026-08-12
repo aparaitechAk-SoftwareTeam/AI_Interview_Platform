@@ -53,13 +53,21 @@ export default function CandidatesPage() {
     }
   };
 
-  const handleDownloadTemplate = () => {
-    const link = document.createElement('a');
-    link.href = 'http://localhost:4000/api/candidates/import-template';
-    link.download = 'candidate_import_template.csv';
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
+  const handleDownloadTemplate = async () => {
+    try {
+      const response = await candidates.getImportTemplate();
+      const url = window.URL.createObjectURL(new Blob([response.data]));
+      const link = document.createElement('a');
+      link.href = url;
+      link.setAttribute('download', 'candidate_import_template.csv');
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error('Failed to download candidate template:', err);
+      alert('Failed to download template. Please try again.');
+    }
   };
 
   const handleFileChange = (e) => {

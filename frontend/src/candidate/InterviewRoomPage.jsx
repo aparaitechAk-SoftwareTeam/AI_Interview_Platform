@@ -8,7 +8,21 @@ import {
   Clock, Play, Pause, Bot, Camera, Sparkles, CheckCircle2, User
 } from 'lucide-react';
 
-const SOCKET_URL = 'http://localhost:4000';
+const getSocketUrl = () => {
+  if (import.meta.env.VITE_SOCKET_URL) {
+    return import.meta.env.VITE_SOCKET_URL.replace(/\/+$/, '');
+  }
+  if (import.meta.env.VITE_BACKEND_URL) {
+    const url = import.meta.env.VITE_BACKEND_URL.replace(/\/+$/, '');
+    return url.replace(/\/api\/?$/, '');
+  }
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL.replace(/\/+$/, '').replace(/\/api\/?$/, '');
+  }
+  return 'http://localhost:4000';
+};
+
+const SOCKET_URL = getSocketUrl();
 
 export default function InterviewRoomPage() {
   const navigate = useNavigate();
