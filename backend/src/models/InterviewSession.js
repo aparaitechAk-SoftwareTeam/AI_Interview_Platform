@@ -51,6 +51,7 @@ const qaSchema = new mongoose.Schema(
     },
     reasoning: String,
     feedback: String,
+    classification: { type: String, default: 'PARTIALLY_CORRECT' },
   },
   { _id: true }
 );

@@ -2,6 +2,8 @@ import express from 'express';
 import multer from 'multer';
 import pdf from 'pdf-parse';
 import Candidate from '../models/Candidate.js';
+import InterviewCheckpoint from '../models/InterviewCheckpoint.js';
+import InterviewSession from '../models/InterviewSession.js';
 import { getLLMProvider } from '../services/ai/index.js';
 import { getStorageProvider } from '../services/storage/index.js';
 
@@ -113,6 +115,20 @@ router.post('/upload/:candidateId', (req, res, next) => {
       parsed: parsedData,
     };
     await candidate.save();
+
+    // Clean up any unstarted or empty sessions/checkpoints so subsequent interview start generates a fresh question
+    try {
+      const checkpoints = await InterviewCheckpoint.find({ candidate: candidate._id });
+      for (const chk of checkpoints) {
+        const sess = await InterviewSession.findById(chk.interviewSession);
+        if (!sess || !sess.qa || sess.qa.length === 0) {
+          await InterviewCheckpoint.deleteOne({ _id: chk._id });
+          if (sess) await InterviewSession.deleteOne({ _id: sess._id });
+        }
+      }
+    } catch (cleanErr) {
+      console.warn('[Resume Upload] Non-fatal session cleanup warning:', cleanErr.message);
+    }
 
     res.status(200).json({
       success: true,

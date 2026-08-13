@@ -270,6 +270,44 @@ export default function CandidateDetailPage() {
             </div>
           )}
 
+          {/* Detailed Question-by-Question AI Evaluation */}
+          {session && session.qa?.length > 0 && (
+            <div className="card">
+              <h3 style={{ fontSize: '1rem', marginBottom: '1.25rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <FileText size={16} /> Question-by-Question AI Evaluation ({session.qa.length})
+              </h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                {session.qa.map((qaItem, idx) => (
+                  <div key={idx} style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-primary)', borderRadius: 10, padding: '1rem' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                      <div style={{ fontWeight: 700, fontSize: '0.9rem', color: 'var(--text-primary)' }}>
+                        Q{idx + 1}: {qaItem.question}
+                      </div>
+                      <span style={{
+                        padding: '0.15rem 0.5rem', borderRadius: 999, fontSize: '0.7rem', fontWeight: 700,
+                        background: qaItem.classification === 'CORRECT' ? 'rgba(16, 185, 129, 0.15)' : qaItem.classification === 'NOT_ANSWERED' ? 'rgba(239, 68, 68, 0.15)' : 'rgba(245, 158, 11, 0.15)',
+                        color: qaItem.classification === 'CORRECT' ? 'var(--success)' : qaItem.classification === 'NOT_ANSWERED' ? 'var(--error)' : '#f59e0b',
+                        whiteSpace: 'nowrap'
+                      }}>
+                        {qaItem.classification || 'EVALUATED'} ({qaItem.scores?.technical ?? 0}/100)
+                      </span>
+                    </div>
+                    {qaItem.answer && (
+                      <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', background: 'var(--bg-secondary)', padding: '0.5rem 0.75rem', borderRadius: 6, marginBottom: '0.5rem', fontStyle: 'italic' }}>
+                        "{qaItem.answer}"
+                      </div>
+                    )}
+                    {qaItem.reasoning && (
+                      <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>
+                        <strong>AI Assessment:</strong> {qaItem.reasoning}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Admin Notes */}
           <div className="card">
             <h3 style={{ fontSize: '1rem', marginBottom: '1rem' }}>Admin Notes</h3>

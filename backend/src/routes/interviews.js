@@ -35,22 +35,22 @@ router.post('/start', async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Interview link has expired' });
     }
 
-    // Attempt Recovery
+    // Attempt Recovery (only for active uncompleted sessions that have existing Q&A history)
     const checkpoint = await InterviewCheckpoint.findOne({ candidate: candidate._id });
     if (checkpoint) {
       const activeSession = await InterviewSession.findById(checkpoint.interviewSession);
-      if (activeSession) {
+      if (activeSession && activeSession.status !== 'COMPLETED' && activeSession.status !== 'TERMINATED' && activeSession.qa && activeSession.qa.length > 0) {
         activeSession.status = 'RECOVERING';
         await activeSession.save();
 
-        const currentQa = activeSession.qa?.[activeSession.qa.length - 1];
-        const currentQuestion = currentQa ? {
+        const currentQa = activeSession.qa[activeSession.qa.length - 1];
+        const currentQuestion = {
           questionIndex: activeSession.qa.length - 1,
           text: currentQa.question,
           category: currentQa.category || 'technical',
           topic: currentQa.topic || 'General',
           difficulty: currentQa.difficulty || '3',
-        } : null;
+        };
 
         return res.status(200).json({
           success: true,
@@ -61,6 +61,9 @@ router.post('/start', async (req, res, next) => {
             recovered: true,
           }
         });
+      } else {
+        // Delete stale/completed checkpoint to allow clean new session creation
+        await InterviewCheckpoint.deleteOne({ _id: checkpoint._id });
       }
     }
 
@@ -101,8 +104,18 @@ router.post('/start', async (req, res, next) => {
       difficulty: candidate.template?.difficulty || '3',
     });
 
-    // Generate first question immediately
+    // Ensure candidate resume is parsed before generating first question
     const llm = getLLMProvider();
+    if (candidate.resume?.text && (!candidate.resume.parsed || !candidate.resume.parsed.skills?.length)) {
+      try {
+        const parsedProfile = await llm.analyzeResume(candidate.resume.text, candidate.jobRole);
+        candidate.resume.parsed = parsedProfile;
+        await candidate.save();
+      } catch (parseErr) {
+        console.warn('[Interview Start] Resume auto-parsing fallback:', parseErr.message);
+      }
+    }
+
     const nextQuestionData = await llm.selectNextQuestion(session, candidate, initialCheckpoint);
 
     // Save asked question to the session qa array
@@ -177,7 +190,10 @@ router.get('/session/:id', async (req, res, next) => {
 router.post('/next-question', async (req, res, next) => {
   try {
     const { sessionId } = req.body;
-    const session = await InterviewSession.findById(sessionId).populate('candidate');
+    const session = await InterviewSession.findById(sessionId).populate({
+      path: 'candidate',
+      populate: { path: 'jobRole' },
+    });
     if (!session) {
       return res.status(404).json({ success: false, message: 'Session not found' });
     }
@@ -242,7 +258,10 @@ router.post('/submit-answer', upload.single('audio'), async (req, res, next) => 
       return res.status(400).json({ success: false, message: 'Session ID and question index are required' });
     }
 
-    const session = await InterviewSession.findById(sessionId).populate('candidate');
+    const session = await InterviewSession.findById(sessionId).populate({
+      path: 'candidate',
+      populate: { path: 'jobRole' },
+    });
     if (!session) {
       return res.status(404).json({ success: false, message: 'Session not found' });
     }
@@ -299,6 +318,7 @@ router.post('/submit-answer', upload.single('audio'), async (req, res, next) => 
     activeQA.scores = evaluation.scores;
     activeQA.reasoning = evaluation.reasoning;
     activeQA.feedback = evaluation.feedback;
+    activeQA.classification = evaluation.classification || 'PARTIALLY_CORRECT';
 
     // Re-calculate rolling overall scores
     let count = 0;

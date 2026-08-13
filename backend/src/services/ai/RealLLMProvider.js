@@ -1,4 +1,5 @@
 import LLMProvider from './LLMProvider.js';
+import { buildCandidateProfile } from './DevelopmentLLMProvider.js';
 
 class RealLLMProvider extends LLMProvider {
   constructor(apiKey, modelName) {
@@ -20,7 +21,6 @@ class RealLLMProvider extends LLMProvider {
       payload.generationConfig = {
         responseMimeType: 'application/json',
       };
-      // Include schema instructions in the prompt as fallback
       payload.contents[0].parts[0].text += `\n\nReturn the output STRICTLY in JSON format following this schema structure:\n${JSON.stringify(responseJsonSchema, null, 2)}`;
     }
 
@@ -43,7 +43,6 @@ class RealLLMProvider extends LLMProvider {
       }
 
       if (responseJsonSchema) {
-        // Clean markdown tags like ```json ... ``` if Gemini returned them
         const cleaned = textResponse.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
         return JSON.parse(cleaned);
       }
@@ -55,9 +54,10 @@ class RealLLMProvider extends LLMProvider {
   }
 
   async analyzeResume(resumeText, jobRole) {
-    console.log('[RealLLM] Analyzing resume...');
+    console.log('[RealLLM] Analyzing resume with Gemini AI...');
     const prompt = `
-      You are an expert AI Resume Analyzer. Given the following resume text and the targeted job role details, extract key professional profiles.
+      You are an expert AI Resume Analyzer. Given the following resume text and targeted job role, extract key candidate details.
+      Do NOT invent or hallucinate skills, projects, or experience that are not present in the text.
       
       Job Role targeted: ${JSON.stringify(jobRole)}
       Resume Text:
@@ -80,7 +80,7 @@ class RealLLMProvider extends LLMProvider {
   async generateStrategy(candidateContext, templateConfig) {
     console.log('[RealLLM] Generating interview strategy...');
     const prompt = `
-      You are an AI Interview Strategist. Based on the candidate profile and the interview template configuration, generate the interview roadmap.
+      You are an AI Interview Strategist. Based on the candidate profile and template configuration, generate an adaptive interview roadmap.
       
       Candidate details: ${JSON.stringify(candidateContext)}
       Template config: ${JSON.stringify(templateConfig)}
@@ -110,24 +110,40 @@ class RealLLMProvider extends LLMProvider {
   }
 
   async selectNextQuestion(session, candidate, checkpoint) {
-    console.log('[RealLLM] Dynamically determining next question...');
-    const resumeProfile = candidate?.resume?.parsed || null;
+    const profile = buildCandidateProfile(candidate);
+    const previousQA = session.qa || [];
+    const lastQA = previousQA.length > 0 ? previousQA[previousQA.length - 1] : null;
+
+    console.log(`[RealLLM] Dynamically generating candidate-specific question for ${profile.candidateName} (${profile.candidateId})...`);
+
     const prompt = `
-      You are an adaptive AI Interviewer conducting a resume-based interview.
-      This question MUST be grounded in the candidate's actual resume content below —
-      do not ask generic questions that could apply to any candidate. Reference specific
-      skills, technologies, or projects from their resume, and never repeat a topic already covered.
+      You are an adaptive AI Interviewer conducting a resume-grounded technical interview for Candidate "${profile.candidateName}" applying for the Job Role "${profile.jobRole.name}".
+      
+      CRITICAL DATA SEPARATION RULES:
+      1. VERIFIED CANDIDATE RESUME FACTS (ONLY THIS REPRESENTS THE CANDIDATE'S EXPERIENCE):
+         - Verified Candidate Skills: ${JSON.stringify(profile.candidate.skills)}
+         - Verified Candidate Technologies: ${JSON.stringify(profile.candidate.technologies)}
+         - Verified Candidate Projects: ${JSON.stringify(profile.candidate.projects)}
+         - Raw Resume Excerpt: ${(candidate?.resume?.text || '').slice(0, 1500)}
 
-      Candidate name: ${candidate?.name || 'Candidate'}
-      Job role applied for: ${candidate?.jobRole?.name || 'N/A'}
-      Candidate resume analysis (skills/technologies/projects/experience extracted from their uploaded resume): ${JSON.stringify(resumeProfile)}
-      Raw resume text excerpt (first 2000 chars): ${(candidate?.resume?.text || '').slice(0, 2000)}
+      2. TARGET JOB ROLE REQUIREMENTS (SEPARATE SOURCE - NOT CANDIDATE EXPERIENCE):
+         - Target Role Name: ${profile.jobRole.name}
+         - Role Required Skills: ${JSON.stringify(profile.jobRole.requiredSkills)}
 
-      History of questions already asked and the candidate's answers so far: ${JSON.stringify(session.qa)}
-      Topics already covered (do NOT repeat these): ${JSON.stringify(checkpoint?.topicCoverage || [])}
-      Current adaptive difficulty level: ${checkpoint?.difficulty || '3'}
+      STRICT ZERO-HALLUCINATION INSTRUCTIONS:
+      - NEVER claim that the candidate has experience, expertise, knowledge, or projects with a technology UNLESS that technology appears in the VERIFIED CANDIDATE RESUME FACTS list above.
+      - Role Required Skills are NOT candidate skills. Do not phrase questions as "You have experience with X" unless X is in the Verified Candidate Resume Facts.
+      - For Candidate Opening Question (Question 1): Address Candidate "${profile.candidateName}" by name and ask a personalized technical question referencing their verified projects (${JSON.stringify(profile.candidate.projects)}) or verified skills (${JSON.stringify(profile.candidate.skills)}).
+      - ADAPTIVE BRANCHING:
+         - If last answer score >= 75 (Strong): Escalate to a deeper technical/architectural question on the topic.
+         - If last answer score 40-74 (Partial): Ask a practical implementation or trade-off question.
+         - If last answer score < 40 / NOT_ANSWERED: Switch to another verified skill from candidate profile.
+      - DO NOT repeat questions or topics already asked.
 
-      If the resume analysis has no usable skills/projects, fall back to a general but role-relevant question.
+      Previous Asked Questions & Evaluated Answers: ${JSON.stringify(previousQA)}
+      Topics Covered: ${JSON.stringify(checkpoint?.topicCoverage || [])}
+      Adaptive Difficulty Level (1-5): ${checkpoint?.difficulty || '3'}
+      Last QA Result: ${JSON.stringify(lastQA ? { question: lastQA.question, answer: lastQA.answer, scores: lastQA.scores } : null)}
     `;
 
     const schema = {
@@ -141,19 +157,24 @@ class RealLLMProvider extends LLMProvider {
   }
 
   async generateQuestion(promptText) {
-    console.log('[RealLLM] Generating custom question...');
     return this._callGemini(promptText);
   }
 
   async evaluateAnswer(question, answer, expectedCompetency) {
-    console.log('[RealLLM] Evaluating answer...');
+    console.log('[RealLLM] Evaluating answer strictly against question & expected concepts...');
     const prompt = `
-      Evaluate the candidate's answer to the given question.
-      Question: ${question}
-      Answer: ${answer}
-      Expected Competency details: ${expectedCompetency || 'General technical proficiency'}
+      Evaluate the candidate's answer strictly against the question asked.
       
-      Score categories should be rated from 0 to 100. Provide clear, constructive evaluation.
+      Question: "${question}"
+      Candidate Answer Transcript: "${answer}"
+      Expected Competency Domain: ${expectedCompetency || 'Technical proficiency'}
+
+      RULES:
+      1. Evaluate relevance: Did the candidate answer the actual question?
+      2. If candidate says "I don't know", "no idea", "not sure", or gives empty/irrelevant response, score 0-15 and classify as NOT_ANSWERED or INCORRECT.
+      3. Do NOT penalize valid alternative explanations or technical approaches.
+      4. Rate scores from 0 to 100 for each dimension.
+      5. Provide classification: CORRECT, PARTIALLY_CORRECT, INCORRECT, or NOT_ANSWERED.
     `;
 
     const schema = {
@@ -165,18 +186,21 @@ class RealLLMProvider extends LLMProvider {
         aptitude: 0,
         communication: 0,
       },
+      classification: 'CORRECT | PARTIALLY_CORRECT | INCORRECT | NOT_ANSWERED',
       reasoning: 'string',
       feedback: 'string',
+      strengths: ['string'],
+      weaknesses: ['string'],
+      missingPoints: ['string'],
     };
 
     return this._callGemini(prompt, schema);
   }
 
   async decideFollowUp(question, answer, evaluation) {
-    console.log('[RealLLM] Deciding if follow-up is required...');
     const prompt = `
-      Based on the candidate's response to: "${question}" and the transcription: "${answer}" (with evaluation scores: ${JSON.stringify(evaluation.scores)}),
-      determine if we should ask a contextual follow-up question to dig deeper or if we can proceed to the next topic.
+      Based on question: "${question}", answer: "${answer}", and scores: ${JSON.stringify(evaluation.scores)},
+      determine if a follow-up question is needed to clarify or probe deeper.
     `;
 
     const schema = {
@@ -208,7 +232,6 @@ class RealLLMProvider extends LLMProvider {
   }
 
   async generateBatchSummary(candidates, role) {
-    console.log('[RealLLM] Generating cohort hiring summary...');
     const prompt = `
       Provide a high-level summary of the cohort's performance for the Role: ${role}.
       Candidates data list: ${JSON.stringify(candidates)}
