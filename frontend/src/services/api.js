@@ -46,6 +46,7 @@ export const candidates = {
   get: (id) => API.get(`/candidates/${id}`),
   update: (id, data) => API.put(`/candidates/${id}`, data),
   delete: (id) => API.delete(`/candidates/${id}`),
+  deleteAll: (confirmText) => API.delete('/candidates/all', { data: { confirmText: confirmText || 'DELETE' } }),
   addNote: (id, text) => API.post(`/candidates/${id}/notes`, { text }),
   retry: (id, reason) => API.post(`/candidates/${id}/retry`, { reason }),
   extend: (id, extensionDays) => API.post(`/candidates/${id}/extend`, { extensionDays }),

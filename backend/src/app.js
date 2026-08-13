@@ -75,12 +75,26 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 app.get('/api/health', async (req, res) => {
   const { getEmailService } = await import('./services/email/EmailService.js').catch(() => ({ getEmailService: () => ({ isConfigured: false }) }));
   const emailService = getEmailService();
+
+  let outboundIp = 'Unknown';
+  try {
+    const ipRes = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(3000) });
+    if (ipRes.ok) {
+      const ipData = await ipRes.json();
+      outboundIp = ipData.ip;
+    }
+  } catch (err) {
+    // Fallback or ignore timeout
+  }
+
   res.status(200).json({
     success: true,
     server: 'Running',
     database: mongoose.connection.readyState === 1 ? 'Connected' : 'Disconnected',
     environment: process.env.NODE_ENV || 'development',
     emailConfigured: emailService ? emailService.isConfigured : false,
+    emailDiagnostic: emailService?.getDiagnosticInfo ? emailService.getDiagnosticInfo() : null,
+    outboundIp,
     timestamp: new Date().toISOString(),
   });
 });

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { candidates, jobRoles, campaigns } from '../services/api.js';
-import { Plus, Search, Filter, Upload, Eye, MoreHorizontal, UserPlus, RefreshCw, Download, Users, CheckCircle2, AlertTriangle, X, Copy, ExternalLink, FileSpreadsheet } from 'lucide-react';
+import { Plus, Search, Filter, Upload, Eye, MoreHorizontal, UserPlus, RefreshCw, Download, Users, CheckCircle2, AlertTriangle, X, Copy, ExternalLink, FileSpreadsheet, Trash2 } from 'lucide-react';
 
 const PIPELINE_COLORS = {
   INVITED: '#f59e0b',
@@ -39,17 +39,73 @@ export default function CandidatesPage() {
   const [importSummary, setImportSummary] = useState(null);
   const [importRows, setImportRows] = useState([]);
 
+  // Delete Candidate Modals State
+  const [candidateToDelete, setCandidateToDelete] = useState(null);
+  const [deletingSingle, setDeletingSingle] = useState(false);
+  const [singleDeleteError, setSingleDeleteError] = useState('');
+
+  const [showDeleteAllModal, setShowDeleteAllModal] = useState(false);
+  const [deleteAllInput, setDeleteAllInput] = useState('');
+  const [deletingAll, setDeletingAll] = useState(false);
+  const [deleteAllError, setDeleteAllError] = useState('');
+
+  const handleConfirmSingleDelete = async () => {
+    if (!candidateToDelete) return;
+    setDeletingSingle(true);
+    setSingleDeleteError('');
+    try {
+      await candidates.delete(candidateToDelete._id);
+      setSuccess(`Candidate "${candidateToDelete.name}" deleted successfully.`);
+      setCandidateToDelete(null);
+      fetchData();
+      setTimeout(() => setSuccess(''), 5000);
+    } catch (err) {
+      console.error(err);
+      setSingleDeleteError(err.response?.data?.message || 'Failed to delete candidate. Please try again.');
+    } finally {
+      setDeletingSingle(false);
+    }
+  };
+
+  const handleConfirmDeleteAll = async () => {
+    if (deleteAllInput !== 'DELETE') {
+      setDeleteAllError('You must type DELETE in capital letters to confirm.');
+      return;
+    }
+    setDeletingAll(true);
+    setDeleteAllError('');
+    try {
+      const res = await candidates.deleteAll('DELETE');
+      setSuccess(res.data?.message || 'All candidates deleted successfully.');
+      setShowDeleteAllModal(false);
+      setDeleteAllInput('');
+      fetchData();
+      setTimeout(() => setSuccess(''), 5000);
+    } catch (err) {
+      console.error(err);
+      setDeleteAllError(err.response?.data?.message || 'Failed to delete all candidates. Please try again.');
+    } finally {
+      setDeletingAll(false);
+    }
+  };
+
   // Handlers
   const handleResendEmail = async (candidateId) => {
     const cand = list.find(c => c._id === candidateId);
     const emailStr = cand ? ` to ${cand.email}` : '';
     try {
-      await candidates.resendEmail(candidateId);
-      alert(`Invitation email sent successfully${emailStr}.`);
+      const res = await candidates.resendEmail(candidateId);
+      if (res.data?.success && res.data?.emailSent !== false) {
+        alert(`Invitation email sent successfully${emailStr}.`);
+      } else {
+        const errorDetail = res.data?.error || res.data?.message || 'Email delivery failed';
+        alert(`Failed to send invitation email${emailStr}: ${errorDetail}`);
+      }
       fetchData();
     } catch (err) {
       console.error(err);
-      alert('Failed to send invitation email. Please try again.');
+      const errMsg = err.response?.data?.error || err.response?.data?.message || 'Failed to send invitation email. Please check email provider settings.';
+      alert(`Failed to send invitation email${emailStr}: ${errMsg}`);
     }
   };
 
@@ -177,13 +233,20 @@ export default function CandidatesPage() {
     setSaving(true);
     setError('');
     try {
-      await candidates.create(form);
-      setSuccess('Candidate created and invitation generated!');
+      const res = await candidates.create(form);
+      const inv = res.data?.invitation;
+      if (inv?.emailSent === false || inv?.emailStatus === 'FAILED') {
+        const errorDetail = inv?.emailError || 'Email provider rejected delivery';
+        setSuccess(`Candidate created (${inv?.code || 'Code generated'}), BUT invitation email failed: ${errorDetail}. Use Resend button to try again.`);
+      } else {
+        setSuccess(`Candidate created & invitation email sent successfully (${inv?.code || ''})!`);
+      }
       setShowAddModal(false);
       setForm({ name: '', email: '', mobile: '', college: '', jobRole: '', experienceLevel: 'Fresher', duration: 5 });
       fetchData();
-      setTimeout(() => setSuccess(''), 4000);
+      setTimeout(() => setSuccess(''), 7000);
     } catch (err) {
+      console.error(err);
       setError(err.response?.data?.message || 'Failed to create candidate');
     } finally {
       setSaving(false);
@@ -206,6 +269,15 @@ export default function CandidatesPage() {
           </button>
           <button className="btn btn-primary" onClick={() => setShowAddModal(true)}>
             <UserPlus size={15} /> Add Candidate
+          </button>
+          <button
+            className="btn btn-secondary"
+            onClick={() => { setShowDeleteAllModal(true); setDeleteAllInput(''); setDeleteAllError(''); }}
+            disabled={list.length === 0}
+            style={{ color: 'var(--error)', borderColor: 'rgba(239, 68, 68, 0.3)', display: 'inline-flex', alignItems: 'center', gap: '0.375rem' }}
+            title="Delete all candidate records"
+          >
+            <Trash2 size={15} /> Delete All
           </button>
         </div>
       </div>
@@ -357,6 +429,14 @@ export default function CandidatesPage() {
                           <RefreshCw size={11} /> Resend
                         </button>
                       )}
+                      <button
+                        className="btn btn-secondary"
+                        onClick={() => { setCandidateToDelete(c); setSingleDeleteError(''); }}
+                        style={{ padding: '0.375rem 0.75rem', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem', color: 'var(--error)', borderColor: 'rgba(239, 68, 68, 0.3)' }}
+                        title="Delete candidate"
+                      >
+                        <Trash2 size={12} /> Delete
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -719,6 +799,121 @@ export default function CandidatesPage() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+      )}
+      {/* Single Candidate Delete Confirmation Modal */}
+      {candidateToDelete && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }}>
+          <div className="card" style={{ width: '100%', maxWidth: 480, padding: 0, overflow: 'hidden', border: '1px solid var(--border-primary)' }}>
+            <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid var(--border-primary)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--error)' }}>
+                <Trash2 size={20} />
+                <h2 style={{ fontSize: '1.15rem', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>Delete Candidate?</h2>
+              </div>
+              <button onClick={() => { setCandidateToDelete(null); setSingleDeleteError(''); }} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', padding: 4 }}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ padding: '1.5rem' }}>
+              <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', borderRadius: 8, padding: '0.875rem 1rem', marginBottom: '1.25rem', color: 'var(--error)', fontSize: '0.875rem', lineHeight: '1.4' }}>
+                ⚠️ Are you sure you want to permanently delete this candidate? This action cannot be undone and will remove all associated interview records.
+              </div>
+
+              <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-primary)', borderRadius: 8, padding: '1rem', marginBottom: '1.25rem' }}>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', textTransform: 'uppercase', fontWeight: 600, marginBottom: '0.5rem' }}>Candidate Details</div>
+                <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)' }}>{candidateToDelete.name}</div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>{candidateToDelete.email}</div>
+                {candidateToDelete.jobRole?.name && (
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginTop: '0.35rem' }}>Role: {candidateToDelete.jobRole.name}</div>
+                )}
+              </div>
+
+              {singleDeleteError && (
+                <div style={{ color: 'var(--error)', fontSize: '0.85rem', marginBottom: '1rem', padding: '0.5rem', background: 'rgba(239,68,68,0.1)', borderRadius: 6 }}>
+                  {singleDeleteError}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+                <button className="btn btn-secondary" onClick={() => { setCandidateToDelete(null); setSingleDeleteError(''); }} disabled={deletingSingle}>
+                  Cancel
+                </button>
+                <button
+                  className="btn btn-primary"
+                  onClick={handleConfirmSingleDelete}
+                  disabled={deletingSingle}
+                  style={{ background: 'var(--error)', borderColor: 'var(--error)', display: 'inline-flex', alignItems: 'center', gap: '0.375rem' }}
+                >
+                  {deletingSingle ? 'Deleting...' : 'Delete Candidate'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete ALL Candidates Confirmation Modal */}
+      {showDeleteAllModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }}>
+          <div className="card" style={{ width: '100%', maxWidth: 500, padding: 0, overflow: 'hidden', border: '1px solid var(--border-primary)' }}>
+            <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid var(--border-primary)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--error)' }}>
+                <AlertTriangle size={22} />
+                <h2 style={{ fontSize: '1.15rem', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>Delete All Candidates?</h2>
+              </div>
+              <button onClick={() => { setShowDeleteAllModal(false); setDeleteAllInput(''); setDeleteAllError(''); }} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', padding: 4 }}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ padding: '1.5rem' }}>
+              <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', borderRadius: 8, padding: '1rem', marginBottom: '1.25rem', color: 'var(--error)', fontSize: '0.875rem', lineHeight: '1.5' }}>
+                🚨 <strong>CRITICAL WARNING:</strong> This will permanently delete <strong>ALL {list.length} candidate records</strong> and all associated interview sessions, results, and reports. This action CANNOT be undone.
+              </div>
+
+              <div style={{ marginBottom: '1.25rem' }}>
+                <label className="form-label" style={{ fontWeight: 600, color: 'var(--text-secondary)', marginBottom: '0.5rem', display: 'block', fontSize: '0.85rem' }}>
+                  Please type <strong>DELETE</strong> in capital letters to confirm:
+                </label>
+                <input
+                  type="text"
+                  className="form-input"
+                  placeholder="Type DELETE to confirm"
+                  value={deleteAllInput}
+                  onChange={(e) => { setDeleteAllInput(e.target.value); setDeleteAllError(''); }}
+                  disabled={deletingAll}
+                  style={{ fontFamily: 'monospace', fontSize: '0.95rem', letterSpacing: '0.05em' }}
+                />
+              </div>
+
+              {deleteAllError && (
+                <div style={{ color: 'var(--error)', fontSize: '0.85rem', marginBottom: '1rem', padding: '0.5rem 0.75rem', background: 'rgba(239,68,68,0.1)', borderRadius: 6 }}>
+                  {deleteAllError}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+                <button className="btn btn-secondary" onClick={() => { setShowDeleteAllModal(false); setDeleteAllInput(''); setDeleteAllError(''); }} disabled={deletingAll}>
+                  Cancel
+                </button>
+                <button
+                  className="btn btn-primary"
+                  onClick={handleConfirmDeleteAll}
+                  disabled={deleteAllInput !== 'DELETE' || deletingAll}
+                  style={{
+                    background: deleteAllInput === 'DELETE' ? 'var(--error)' : 'var(--bg-tertiary)',
+                    borderColor: deleteAllInput === 'DELETE' ? 'var(--error)' : 'var(--border-primary)',
+                    color: deleteAllInput === 'DELETE' ? '#fff' : 'var(--text-tertiary)',
+                    cursor: deleteAllInput === 'DELETE' && !deletingAll ? 'pointer' : 'not-allowed',
+                    display: 'inline-flex', alignItems: 'center', gap: '0.375rem'
+                  }}
+                >
+                  {deletingAll ? 'Deleting All Candidates...' : 'Permanently Delete All Candidates'}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

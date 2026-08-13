@@ -7,62 +7,75 @@ import {
 
 class EmailService {
   constructor() {
-    this.host = process.env.BREVO_SMTP_HOST;
-    this.port = parseInt(process.env.BREVO_SMTP_PORT || '587');
-    this.user = process.env.BREVO_SMTP_USER;
-    this.pass = process.env.BREVO_API_KEY;
+    this.provider = (process.env.MAIL_PROVIDER || 'smtp').toLowerCase();
+    
+    // Explicit SMTP variables
+    this.host = process.env.SMTP_HOST || process.env.BREVO_SMTP_HOST;
+    this.port = parseInt(process.env.SMTP_PORT || process.env.BREVO_SMTP_PORT || '587');
+    this.user = process.env.SMTP_USER || process.env.BREVO_SMTP_USER;
+    this.pass = process.env.SMTP_PASS || (this.provider === 'brevo' ? process.env.BREVO_API_KEY : '');
 
-    const fromEmail = process.env.MAIL_FROM_EMAIL;
-    const fromName = process.env.MAIL_FROM_NAME || 'Aparaitech Software';
-    this.from = fromEmail ? `"${fromName}" <${fromEmail}>` : null;
+    const fromAddress = process.env.MAIL_FROM || process.env.MAIL_FROM_EMAIL || process.env.SMTP_USER || process.env.BREVO_SMTP_USER || '';
+    const fromName = process.env.MAIL_FROM_NAME || 'Aparaitech Recruitment';
+    this.from = {
+      name: fromName,
+      address: fromAddress
+    };
+    this.replyTo = process.env.MAIL_REPLY_TO || fromAddress;
 
     this.transporter = null;
     this.isConfigured = false;
+    this.verificationStatus = 'UNVERIFIED';
 
-    // Configuration Validation
-    if (!this.host || !this.user || !this.pass || !fromEmail ||
-        this._isPlaceholder(this.host) || this._isPlaceholder(this.user) || this._isPlaceholder(this.pass) || this._isPlaceholder(fromEmail)) {
-      console.warn('========================================================================');
-      console.warn('[Email Config Error] Email service is NOT configured correctly!');
-      console.warn('Missing or placeholder values found in environment variables:');
-      if (!this.host || this._isPlaceholder(this.host)) console.warn(' - BREVO_SMTP_HOST');
-      if (!this.port) console.warn(' - BREVO_SMTP_PORT');
-      if (!this.user || this._isPlaceholder(this.user)) console.warn(' - BREVO_SMTP_USER');
-      if (!this.pass || this._isPlaceholder(this.pass)) console.warn(' - BREVO_API_KEY');
-      if (!fromEmail || this._isPlaceholder(fromEmail)) console.warn(' - MAIL_FROM_EMAIL');
-      console.warn('All emails will be mocked and logged in the backend console.');
-      console.warn('========================================================================');
-    } else {
-      try {
-        this.transporter = nodemailer.createTransport({
-          host: this.host,
-          port: this.port,
-          secure: this.port === 465,
-          auth: {
-            user: this.user,
-            pass: this.pass,
-          },
-        });
+    if (this.provider === 'smtp') {
+      if (this.host && this.user && this.pass && fromAddress &&
+          !this._isPlaceholder(this.host) && !this._isPlaceholder(this.user) && !this._isPlaceholder(this.pass) && !this._isPlaceholder(fromAddress)) {
+        try {
+          const isGmail = this.host.includes('gmail.com') || process.env.SMTP_SERVICE === 'gmail';
+          this.transporter = nodemailer.createTransport(isGmail ? {
+            service: 'gmail',
+            auth: {
+              user: this.user,
+              pass: this.pass,
+            },
+          } : {
+            host: this.host,
+            port: this.port,
+            secure: this.port === 465,
+            auth: {
+              user: this.user,
+              pass: this.pass,
+            },
+            tls: { rejectUnauthorized: false }
+          });
+          this.isConfigured = true;
+          
+          this.transporter.verify((err) => {
+            if (err) {
+              this.verificationStatus = `FAILED: ${err.message}`;
+              console.error(`[Email Service] SMTP verification FAILED: ${err.message}`);
+            } else {
+              this.verificationStatus = 'VERIFIED_SUCCESS';
+              console.log(`[Email Service] SMTP connection & authentication: VERIFIED SUCCESS`);
+            }
+          });
+        } catch (error) {
+          console.error('[Email Service] Failed to create SMTP transporter:', error.message);
+          this.isConfigured = false;
+          this.verificationStatus = `ERROR: ${error.message}`;
+        }
+      }
+    } else if (this.provider === 'brevo') {
+      const apiKey = process.env.BREVO_API_KEY;
+      if (apiKey && !this._isPlaceholder(apiKey)) {
         this.isConfigured = true;
-        console.log(`[Email Service] SMTP configuration verified: YES`);
-        
-        this.transporter.verify((err, success) => {
-          if (err) {
-            console.error(`[Email Service] SMTP connection validation: FAILED (${err.message}). Will use REST API fallback if API key is valid.`);
-          } else {
-            console.log(`[Email Service] SMTP connection verification: SUCCESS`);
-          }
-        });
-      } catch (error) {
-        console.error('[Email Service] Failed to create SMTP transporter:', error.message);
-        this.isConfigured = false;
+        this.verificationStatus = 'BREVO_API_KEY_PRESENT';
       }
     }
+
+    this._logDiagnostic();
   }
 
-  /**
-   * Helper to verify if a setting uses a placeholder value
-   */
   _isPlaceholder(val) {
     return !val || 
            val.startsWith('<') || 
@@ -70,55 +83,85 @@ class EmailService {
            val.includes('your_');
   }
 
-  /**
-   * Safe centralized email sender with REST API fallback
-   */
+  _mask(str) {
+    if (!str) return 'NOT_CONFIGURED';
+    if (str.length <= 4) return '****';
+    return str.substring(0, 3) + '****' + str.substring(str.length - 3);
+  }
+
+  _logDiagnostic() {
+    console.log('========================================================================');
+    console.log('[Email Service Configuration Diagnostic]');
+    console.log(` - Provider:     ${this.provider.toUpperCase()}`);
+    console.log(` - SMTP Host:    ${this.host || 'N/A'}`);
+    console.log(` - SMTP Port:    ${this.port || 'N/A'}`);
+    console.log(` - SMTP User:    ${this._mask(this.user)}`);
+    console.log(` - Mail From:    "${this.from.name}" <${this.from.address || 'MISSING'}>`);
+    console.log(` - Configured:   ${this.isConfigured ? 'YES' : 'NO'}`);
+    console.log('========================================================================');
+  }
+
+  getDiagnosticInfo() {
+    return {
+      provider: this.provider,
+      host: this.host || null,
+      port: this.port || null,
+      userMasked: this._mask(this.user),
+      from: `"${this.from.name}" <${this.from.address}>`,
+      isConfigured: this.isConfigured,
+      verificationStatus: this.verificationStatus,
+    };
+  }
+
   async sendEmail({ to, subject, html, text }) {
     if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
       console.error(`[EMAIL] Attempted to send to invalid email address: "${to}"`);
-      return { success: false, error: 'Invalid email address' };
+      return { success: false, error: 'Invalid recipient email address' };
     }
 
-    // 1. Try sending via SMTP if transporter was established
-    if (this.isConfigured && this.transporter) {
+    // 1. SMTP Provider
+    if (this.provider === 'smtp') {
+      if (!this.isConfigured || !this.transporter) {
+        const errorMsg = 'SMTP credentials missing or invalid. Please configure SMTP_USER & SMTP_PASS in environment.';
+        console.error(`[EMAIL] Delivery failed for ${to}: ${errorMsg}`);
+        return { success: false, error: errorMsg };
+      }
+
       try {
         const info = await this.transporter.sendMail({
-          from: this.from,
+          from: `"${this.from.name}" <${this.from.address}>`,
+          replyTo: this.replyTo,
           to,
           subject,
           text,
           html,
         });
-        console.log(`[EMAIL] Sent successfully via Brevo SMTP: ${info.messageId}`);
+        console.log(`[EMAIL] Sent successfully via SMTP to ${to} (${info.messageId})`);
         return { success: true, messageId: info.messageId };
       } catch (error) {
-        console.warn(`[EMAIL] Brevo SMTP relay failed (${error.message}). Attempting Brevo REST API fallback...`);
+        console.error(`[EMAIL] SMTP sendMail failed for ${to}: ${error.message}`);
+        return { success: false, error: `SMTP error: ${error.message}` };
       }
     }
 
-    // 2. Fallback: Try sending via Brevo Transactional Email REST API using the API Key
-    if (this.pass && !this._isPlaceholder(this.pass)) {
-      try {
-        const fromEmail = process.env.MAIL_FROM_EMAIL || 'krushnarathod.aparaitech@gmail.com';
-        const fromName = process.env.MAIL_FROM_NAME || 'Aparaitech Software';
+    // 2. Brevo REST API Provider
+    if (this.provider === 'brevo') {
+      const apiKey = process.env.BREVO_API_KEY;
+      if (!apiKey || this._isPlaceholder(apiKey)) {
+        return { success: false, error: 'BREVO_API_KEY missing or invalid in environment.' };
+      }
 
+      try {
         const response = await fetch('https://api.brevo.com/v3/smtp/email', {
           method: 'POST',
           headers: {
             'accept': 'application/json',
-            'api-key': this.pass,
+            'api-key': apiKey,
             'content-type': 'application/json'
           },
           body: JSON.stringify({
-            sender: {
-              name: fromName,
-              email: fromEmail
-            },
-            to: [
-              {
-                email: to
-              }
-            ],
+            sender: { name: this.from.name, email: this.from.address },
+            to: [{ email: to }],
             subject: subject,
             htmlContent: html,
             textContent: text
@@ -127,32 +170,21 @@ class EmailService {
 
         if (response.status === 201 || response.status === 200) {
           const data = await response.json();
-          console.log(`[EMAIL] Sent successfully via Brevo REST API: ${data.messageId}`);
+          console.log(`[EMAIL] Sent successfully via Brevo REST API to ${to}: ${data.messageId}`);
           return { success: true, messageId: data.messageId };
         } else {
           const data = await response.json().catch(() => ({}));
-          console.error('[EMAIL] Brevo REST API transmission failed:', data);
-          return { success: false, error: data.message || 'REST API delivery failed' };
+          const apiErrMsg = data.message || `HTTP ${response.status} ${response.statusText}`;
+          console.error(`[EMAIL] Brevo REST API failed for ${to}:`, apiErrMsg);
+          return { success: false, error: `Brevo API error: ${apiErrMsg}` };
         }
       } catch (apiError) {
-        console.error('[EMAIL] Brevo REST API request failed:', apiError.message);
-        return { success: false, error: apiError.message };
+        console.error(`[EMAIL] Brevo REST API error for ${to}:`, apiError.message);
+        return { success: false, error: `Brevo API error: ${apiError.message}` };
       }
     }
 
-    // 3. Mock fallback for local development preview
-    this._logEmailMock({ to, subject, text });
-    return { success: true, mock: true };
-  }
-
-  _logEmailMock({ to, subject, text }) {
-    console.log('\n=================== MOCK EMAIL LOG ===================');
-    console.log(`To:      ${to}`);
-    console.log(`From:    ${this.from || 'no-reply@aparaitech.com'}`);
-    console.log(`Subject: ${subject}`);
-    console.log('------------------------------------------------------');
-    console.log(text.trim());
-    console.log('======================================================\n');
+    return { success: false, error: `Unsupported MAIL_PROVIDER "${this.provider}"` };
   }
 
   /**
@@ -166,9 +198,9 @@ class EmailService {
     console.log(`[EMAIL] Sending invitation email to ${candidate.email}`);
     const result = await this.sendEmail({ to: candidate.email, subject, html, text });
     if (result.success) {
-      console.log(`[EMAIL] Invitation email sent to ${candidate.email}${result.mock ? ' (MOCKED)' : ''}`);
+      console.log(`[EMAIL] Invitation email sent to ${candidate.email}`);
     } else {
-      console.log(`[EMAIL] Failed to send invitation email to ${candidate.email}`);
+      console.log(`[EMAIL] Failed to send invitation email to ${candidate.email}: ${result.error}`);
     }
     return result;
   }
@@ -190,11 +222,6 @@ class EmailService {
 
     console.log(`[EMAIL] Sending approval email to ${candidate.email}`);
     const result = await this.sendEmail({ to: candidate.email, subject, html, text });
-    if (result.success) {
-      console.log(`[EMAIL] Approval email sent to ${candidate.email}${result.mock ? ' (MOCKED)' : ''}`);
-    } else {
-      console.log(`[EMAIL] Failed to send approval email to ${candidate.email}`);
-    }
     return result;
   }
 
@@ -208,11 +235,6 @@ class EmailService {
 
     console.log(`[EMAIL] Sending rejection email to ${candidate.email}`);
     const result = await this.sendEmail({ to: candidate.email, subject, html, text });
-    if (result.success) {
-      console.log(`[EMAIL] Rejection email sent to ${candidate.email}${result.mock ? ' (MOCKED)' : ''}`);
-    } else {
-      console.log(`[EMAIL] Failed to send rejection email to ${candidate.email}`);
-    }
     return result;
   }
 
@@ -229,8 +251,8 @@ class EmailService {
       return this.sendRejectionEmail(candidate, 0);
     } else {
       const subject = `Update on your interview — application on hold`;
-      const text = `Hello ${candidate.name},\n\nYour application is currently on hold. We will get back to you shortly.\n\nBest regards,\nAparaitech Software`;
-      const html = `<p>Hello <strong>${candidate.name}</strong>,</p><p>Your application is currently on hold. We will get back to you shortly.</p><p>Best regards,<br>Aparaitech Software</p>`;
+      const text = `Hello ${candidate.name},\n\nYour application is currently on hold. We will get back to you shortly.\n\nBest regards,\nAparaitech Recruitment`;
+      const html = `<p>Hello <strong>${candidate.name}</strong>,</p><p>Your application is currently on hold. We will get back to you shortly.</p><p>Best regards,<br>Aparaitech Recruitment</p>`;
       return this.sendEmail({ to: candidate.email, subject, html, text });
     }
   }
@@ -244,8 +266,8 @@ class EmailService {
       ? `We wanted to follow up regarding your application for the position, which is currently on hold. Our team is still reviewing candidates and we will reach out as soon as a final decision is made. Thank you for your patience.`
       : `We wanted to once again thank you for taking the time to interview. While we are not moving forward at this time, we encourage you to keep an eye out for future openings.`;
 
-    const text = `Hello ${candidate.name},\n\n${body}\n\nBest regards,\nAparaitech Software`;
-    const html = `<p>Hello <strong>${candidate.name}</strong>,</p><p>${body}</p><p>Best regards,<br>Aparaitech Software</p>`;
+    const text = `Hello ${candidate.name},\n\n${body}\n\nBest regards,\nAparaitech Recruitment`;
+    const html = `<p>Hello <strong>${candidate.name}</strong>,</p><p>${body}</p><p>Best regards,<br>Aparaitech Recruitment</p>`;
     
     return this.sendEmail({ to: candidate.email, subject, html, text });
   }

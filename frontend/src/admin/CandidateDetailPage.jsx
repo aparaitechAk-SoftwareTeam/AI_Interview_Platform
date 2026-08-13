@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { candidates, reports, results } from '../services/api.js';
 import {
   ArrowLeft, Copy, Mail, Clock, RefreshCw, CheckCircle,
-  AlertTriangle, User, FileText, Star, BarChart2, Eye, PlayCircle, KeyRound
+  AlertTriangle, User, FileText, Star, BarChart2, Eye, PlayCircle, KeyRound, Trash2, X
 } from 'lucide-react';
 
 export default function CandidateDetailPage() {
@@ -77,13 +77,40 @@ export default function CandidateDetailPage() {
     setRegenerating(true);
     try {
       const res = await candidates.regenerateCode(id, 'Admin regenerated code from candidate detail page');
-      setActionMsg(`New code generated: ${res.data.data.code} (emailed to candidate)`);
+      const responseData = res.data;
+      const newCode = responseData.data?.code || '';
+      
+      if (responseData.emailSent === false || responseData.data?.emailStatus === 'FAILED') {
+        const errorDetail = responseData.error || responseData.data?.emailError || 'Email delivery failed';
+        setActionMsg(`New code generated: ${newCode}, BUT email failed to send (${errorDetail})`);
+      } else {
+        setActionMsg(`New code generated: ${newCode} (emailed to candidate successfully)`);
+      }
       fetch();
     } catch (e) {
-      setActionMsg('Failed to regenerate invitation code');
+      const errorMsg = e.response?.data?.message || e.response?.data?.error || 'Failed to regenerate invitation code';
+      setActionMsg(errorMsg);
     } finally {
       setRegenerating(false);
-      setTimeout(() => setActionMsg(''), 4000);
+      setTimeout(() => setActionMsg(''), 7000);
+    }
+  };
+
+  const navigate = useNavigate();
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState('');
+
+  const handleDeleteCandidate = async () => {
+    setDeleting(true);
+    setDeleteError('');
+    try {
+      await candidates.delete(id);
+      navigate('/admin/candidates');
+    } catch (e) {
+      console.error(e);
+      setDeleteError(e.response?.data?.message || 'Failed to delete candidate. Please try again.');
+      setDeleting(false);
     }
   };
 
@@ -91,7 +118,14 @@ export default function CandidateDetailPage() {
     return <div style={{ textAlign: 'center', padding: '4rem', color: 'var(--text-tertiary)' }}>Loading candidate...</div>;
   }
   if (!data) {
-    return <div style={{ textAlign: 'center', padding: '4rem', color: 'var(--error)' }}>Candidate not found.</div>;
+    return (
+      <div style={{ textAlign: 'center', padding: '4rem 1.5rem' }}>
+        <div style={{ color: 'var(--error)', marginBottom: '1rem', fontSize: '1.1rem', fontWeight: 600 }}>Candidate not found or has been deleted.</div>
+        <Link to="/admin/candidates" className="btn btn-secondary" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.375rem' }}>
+          <ArrowLeft size={16} /> Back to Candidates List
+        </Link>
+      </div>
+    );
   }
 
   const inviteLink = invitation?.linkToken
@@ -102,12 +136,21 @@ export default function CandidateDetailPage() {
 
   return (
     <div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '1rem', marginBottom: '2rem' }}>
-        <Link to="/admin/candidates" style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.875rem' }}>
-          <ArrowLeft size={16} /> Candidates
-        </Link>
-        <span style={{ color: 'var(--text-tertiary)' }}>/</span>
-        <span style={{ fontWeight: 600 }}>{data.name}</span>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '2rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+          <Link to="/admin/candidates" style={{ color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.875rem' }}>
+            <ArrowLeft size={16} /> Candidates
+          </Link>
+          <span style={{ color: 'var(--text-tertiary)' }}>/</span>
+          <span style={{ fontWeight: 600 }}>{data.name}</span>
+        </div>
+        <button
+          className="btn btn-secondary"
+          onClick={() => { setShowDeleteModal(true); setDeleteError(''); }}
+          style={{ color: 'var(--error)', borderColor: 'rgba(239, 68, 68, 0.3)', display: 'inline-flex', alignItems: 'center', gap: '0.375rem', fontSize: '0.85rem' }}
+        >
+          <Trash2 size={14} /> Delete Candidate
+        </button>
       </div>
 
       {actionMsg && (
@@ -346,6 +389,57 @@ export default function CandidateDetailPage() {
           )}
         </div>
       </div>
+      {/* Delete Candidate Confirmation Modal */}
+      {showDeleteModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1000, padding: '1rem' }}>
+          <div className="card" style={{ width: '100%', maxWidth: 480, padding: 0, overflow: 'hidden', border: '1px solid var(--border-primary)' }}>
+            <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid var(--border-primary)', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', color: 'var(--error)' }}>
+                <Trash2 size={20} />
+                <h2 style={{ fontSize: '1.15rem', fontWeight: 700, margin: 0, color: 'var(--text-primary)' }}>Delete Candidate?</h2>
+              </div>
+              <button onClick={() => { setShowDeleteModal(false); setDeleteError(''); }} style={{ background: 'none', border: 'none', color: 'var(--text-tertiary)', cursor: 'pointer', padding: 4 }}>
+                <X size={18} />
+              </button>
+            </div>
+
+            <div style={{ padding: '1.5rem' }}>
+              <div style={{ background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.25)', borderRadius: 8, padding: '0.875rem 1rem', marginBottom: '1.25rem', color: 'var(--error)', fontSize: '0.875rem', lineHeight: '1.4' }}>
+                ⚠️ Are you sure you want to permanently delete this candidate? This action cannot be undone and will remove all associated interview records.
+              </div>
+
+              <div style={{ background: 'var(--bg-tertiary)', border: '1px solid var(--border-primary)', borderRadius: 8, padding: '1rem', marginBottom: '1.25rem' }}>
+                <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', textTransform: 'uppercase', fontWeight: 600, marginBottom: '0.5rem' }}>Candidate Details</div>
+                <div style={{ fontSize: '0.95rem', fontWeight: 700, color: 'var(--text-primary)' }}>{data.name}</div>
+                <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', marginTop: '0.15rem' }}>{data.email}</div>
+                {data.jobRole?.name && (
+                  <div style={{ fontSize: '0.8rem', color: 'var(--text-tertiary)', marginTop: '0.35rem' }}>Role: {data.jobRole.name}</div>
+                )}
+              </div>
+
+              {deleteError && (
+                <div style={{ color: 'var(--error)', fontSize: '0.85rem', marginBottom: '1rem', padding: '0.5rem', background: 'rgba(239,68,68,0.1)', borderRadius: 6 }}>
+                  {deleteError}
+                </div>
+              )}
+
+              <div style={{ display: 'flex', gap: '0.75rem', justifyContent: 'flex-end' }}>
+                <button className="btn btn-secondary" onClick={() => { setShowDeleteModal(false); setDeleteError(''); }} disabled={deleting}>
+                  Cancel
+                </button>
+                <button
+                  className="btn btn-primary"
+                  onClick={handleDeleteCandidate}
+                  disabled={deleting}
+                  style={{ background: 'var(--error)', borderColor: 'var(--error)', display: 'inline-flex', alignItems: 'center', gap: '0.375rem' }}
+                >
+                  {deleting ? 'Deleting...' : 'Delete Candidate'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

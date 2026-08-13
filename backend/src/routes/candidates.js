@@ -14,6 +14,15 @@ import { generateInvitationCode, generateLinkToken } from '../utils/invitation.j
 import { getEmailService } from '../services/email/EmailService.js';
 import { getInvitationService } from '../services/InvitationService.js';
 import Notification from '../models/Notification.js';
+import InterviewCheckpoint from '../models/InterviewCheckpoint.js';
+import InterviewRecording from '../models/InterviewRecording.js';
+import InterviewReport from '../models/InterviewReport.js';
+import Result from '../models/Result.js';
+import Resume from '../models/Resume.js';
+import FaceProfile from '../models/FaceProfile.js';
+import SystemCheck from '../models/SystemCheck.js';
+import CalibrationSession from '../models/CalibrationSession.js';
+import PipelineHistory from '../models/PipelineHistory.js';
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -210,25 +219,88 @@ router.put('/:id', protectAdmin, async (req, res, next) => {
   }
 });
 
-// Deactivate/Delete candidate safely
+// Helper function for cascading candidate data deletion
+const performCandidateDataCleanup = async (candidateId = null) => {
+  const query = candidateId ? { candidate: candidateId } : {};
+  const notifQuery = candidateId ? { recipient: candidateId, recipientModel: 'Candidate' } : { recipientModel: 'Candidate' };
+  const candQuery = candidateId ? { _id: candidateId } : {};
+
+  await Promise.all([
+    Invitation.deleteMany(query),
+    InterviewSession.deleteMany(query),
+    InterviewCheckpoint.deleteMany(query),
+    InterviewRecording.deleteMany(query),
+    InterviewReport.deleteMany(query),
+    Result.deleteMany(query),
+    CandidateNote.deleteMany(query),
+    CalibrationSession.deleteMany(query),
+    Resume.deleteMany(query),
+    FaceProfile.deleteMany(query),
+    SystemCheck.deleteMany(query),
+    PipelineHistory.deleteMany(query),
+    Notification.deleteMany(notifQuery),
+    Candidate.deleteMany(candQuery),
+  ]);
+};
+
+// Delete ALL candidates (Requires confirmText: 'DELETE')
+const handleDeleteAllCandidates = async (req, res, next) => {
+  try {
+    const confirmText = req.body?.confirmText || req.query?.confirmText;
+    if (confirmText !== 'DELETE') {
+      return res.status(400).json({
+        success: false,
+        message: 'Confirmation text "DELETE" is required to delete all candidates',
+      });
+    }
+
+    const count = await Candidate.countDocuments();
+    await performCandidateDataCleanup(null);
+
+    await AuditLog.create({
+      action: 'ALL_CANDIDATES_DELETE',
+      admin: req.admin._id,
+      newValue: { count },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Successfully deleted all ${count} candidates and associated data`,
+      data: { deletedCount: count },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+router.delete('/all', protectAdmin, handleDeleteAllCandidates);
+router.post('/delete-all', protectAdmin, handleDeleteAllCandidates);
+
+// Delete ONE candidate by ID
 router.delete('/:id', protectAdmin, async (req, res, next) => {
   try {
-    const candidate = await Candidate.findById(req.params.id);
+    const candidateId = req.params.id;
+    const candidate = await Candidate.findById(candidateId);
     if (!candidate) {
       return res.status(404).json({ success: false, message: 'Candidate not found' });
     }
 
-    candidate.isActive = false;
-    candidate.status = 'DEACTIVATED';
-    await candidate.save();
+    const candidateName = candidate.name;
+    const candidateEmail = candidate.email;
+
+    await performCandidateDataCleanup(candidateId);
 
     await AuditLog.create({
-      action: 'CANDIDATE_DEACTIVATE',
+      action: 'CANDIDATE_DELETE',
       admin: req.admin._id,
-      candidateId: candidate._id,
+      candidateId,
+      newValue: { name: candidateName, email: candidateEmail },
     });
 
-    res.status(200).json({ success: true, message: 'Candidate deactivated successfully' });
+    return res.status(200).json({
+      success: true,
+      message: `Candidate ${candidateName} deleted successfully`,
+    });
   } catch (error) {
     next(error);
   }
@@ -563,7 +635,6 @@ router.post('/import-confirm', protectAdmin, async (req, res, next) => {
     };
 
     const results = [];
-    const createdInvitations = [];
     const invitationService = getInvitationService();
 
     await AuditLog.create({
@@ -611,13 +682,20 @@ router.post('/import-confirm', protectAdmin, async (req, res, next) => {
         const invitation = await invitationService.createInvitation(candidate._id, expiry);
 
         summary.imported++;
-        createdInvitations.push(invitation);
-
         await AuditLog.create({
           action: 'CANDIDATE_IMPORTED',
           admin: req.admin._id,
           candidateId: candidate._id,
         });
+
+        // 3. Send invitation email to THIS specific candidate
+        const emailResult = await invitationService.sendInvitationEmail(invitation._id, req.admin._id, true);
+
+        if (emailResult.success) {
+          summary.emailsSent++;
+        } else {
+          summary.emailsFailed++;
+        }
 
         results.push({
           candidateId: candidate._id,
@@ -626,8 +704,9 @@ router.post('/import-confirm', protectAdmin, async (req, res, next) => {
           status: 'IMPORTED',
           invitationCode: invitation.code,
           invitationLink: invitationService.buildInterviewLink(invitation.linkToken),
-          emailStatus: 'PENDING',
-          error: null,
+          emailStatus: emailResult.emailStatus || (emailResult.success ? 'SENT' : 'FAILED'),
+          emailSent: emailResult.success,
+          error: emailResult.success ? null : (emailResult.error || 'Email delivery failed'),
         });
 
       } catch (rowErr) {
@@ -637,59 +716,14 @@ router.post('/import-confirm', protectAdmin, async (req, res, next) => {
       }
     }
 
-    // Trigger asynchronous controlled concurrency email dispatcher in background
-    const adminId = req.admin._id;
-    if (createdInvitations.length > 0) {
-      (async () => {
-        const batchSize = 5;
-        let emailsSent = 0;
-        let emailsFailed = 0;
-
-        for (let i = 0; i < createdInvitations.length; i += batchSize) {
-          const batch = createdInvitations.slice(i, i + batchSize);
-          await Promise.all(
-            batch.map(async (inv) => {
-              try {
-                const res = await invitationService.sendInvitationEmail(inv._id, adminId);
-                if (res.success) {
-                  emailsSent++;
-                } else {
-                  emailsFailed++;
-                }
-              } catch (err) {
-                console.error(`[Background Email Queue] Error sending email for invitation ${inv._id}:`, err);
-                emailsFailed++;
-              }
-            })
-          );
-
-          if (i + batchSize < createdInvitations.length) {
-            await new Promise((resolve) => setTimeout(resolve, 1000));
-          }
-        }
-
-        // Post-delivery status notification
-        const finalMsg = `Bulk email queue finished: ${emailsSent} invitation emails sent successfully, ${emailsFailed} failed.`;
-        await Notification.create({
-          recipient: adminId,
-          recipientModel: 'Admin',
-          title: 'Bulk Email Queue Finished',
-          message: finalMsg,
-          type: emailsFailed > 0 ? 'WARNING' : 'INFO',
-        });
-      })().catch(queueErr => {
-        console.error('[Background Email Queue] Fatal processing error:', queueErr);
-      });
-    }
-
     // Generate Admin System Notification
-    const notifMsg = `Bulk import completed: ${summary.imported} candidates imported. ${createdInvitations.length} invitation emails queued for delivery in the background.`;
+    const notifMsg = `Bulk import completed: ${summary.imported} candidates imported. ${summary.emailsSent} invitation emails sent successfully, ${summary.emailsFailed} failed.`;
     await Notification.create({
       recipient: req.admin._id,
       recipientModel: 'Admin',
       title: 'Bulk Import Finished',
       message: notifMsg,
-      type: 'INFO',
+      type: summary.emailsFailed > 0 ? 'WARNING' : 'INFO',
     });
 
     await AuditLog.create({
@@ -733,16 +767,35 @@ router.post('/:id/regenerate-code', protectAdmin, async (req, res, next) => {
       type: emailResult.success ? 'INFO' : 'WARNING',
     });
 
-    res.status(200).json({
-      success: true,
-      message: 'New invitation code generated and emailed to the candidate',
-      data: {
-        code: invitation.code,
-        linkToken: invitation.linkToken,
-        inviteLink: invitationService.buildInterviewLink(invitation.linkToken),
-        emailStatus: emailResult.emailStatus || (emailResult.success ? 'SENT' : 'FAILED'),
-      },
-    });
+    if (emailResult.success) {
+      return res.status(200).json({
+        success: true,
+        emailSent: true,
+        message: emailResult.mock
+          ? 'New invitation code generated (Email mocked in dev mode)'
+          : 'New invitation code generated and email sent successfully',
+        data: {
+          code: invitation.code,
+          linkToken: invitation.linkToken,
+          inviteLink: invitationService.buildInterviewLink(invitation.linkToken),
+          emailStatus: emailResult.emailStatus || (emailResult.mock ? 'DEVELOPMENT_PREVIEW' : 'SENT'),
+        },
+      });
+    } else {
+      return res.status(200).json({
+        success: true,
+        emailSent: false,
+        message: `New invitation code generated (${invitation.code}), BUT email delivery failed: ${emailResult.error || 'Email service error'}. Please resend manually or check email settings.`,
+        error: emailResult.error,
+        data: {
+          code: invitation.code,
+          linkToken: invitation.linkToken,
+          inviteLink: invitationService.buildInterviewLink(invitation.linkToken),
+          emailStatus: 'FAILED',
+          emailError: emailResult.error,
+        },
+      });
+    }
   } catch (error) {
     next(error);
   }
