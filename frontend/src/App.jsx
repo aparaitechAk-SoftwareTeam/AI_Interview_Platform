@@ -1,6 +1,9 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 
+// Landing Page
+import LandingPage from './pages/LandingPage.jsx';
+
 // Components
 import ErrorBoundary from './components/ErrorBoundary.jsx';
 
@@ -47,8 +50,8 @@ export default function App() {
       <AdminAuthProvider>
         <BrowserRouter>
           <Routes>
-            {/* Root Redirects */}
-            <Route path="/" element={<Navigate to="/interview" replace />} />
+            {/* Root Entry: Landing Page */}
+            <Route path="/" element={<LandingPage />} />
             <Route path="/admin" element={<Navigate to="/admin/dashboard" replace />} />
 
             {/* Admin Auth */}
@@ -90,7 +93,7 @@ export default function App() {
             <Route path="/interview/results/:id" element={<ResultReleasedPage />} />
 
             {/* Fallback */}
-            <Route path="*" element={<Navigate to="/interview" replace />} />
+            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </BrowserRouter>
       </AdminAuthProvider>
