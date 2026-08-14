@@ -55,7 +55,7 @@ export default function CandidatesPage() {
 
   const handleDownloadTemplate = () => {
     const link = document.createElement('a');
-    link.href = 'http://localhost:4000/api/candidates/import-template';
+    link.href = `${import.meta.env.VITE_API_URL || 'http://localhost:4000/api'}/candidates/import-template`;
     link.download = 'candidate_import_template.csv';
     document.body.appendChild(link);
     link.click();

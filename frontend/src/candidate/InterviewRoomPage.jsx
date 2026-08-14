@@ -8,7 +8,7 @@ import {
   Clock, Play, Pause, Bot, Camera, Sparkles, CheckCircle2, User
 } from 'lucide-react';
 
-const SOCKET_URL = 'http://localhost:4000';
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:4000';
 
 export default function InterviewRoomPage() {
   const navigate = useNavigate();

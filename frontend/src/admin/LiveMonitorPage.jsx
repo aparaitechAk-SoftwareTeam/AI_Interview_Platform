@@ -3,7 +3,7 @@ import { io } from 'socket.io-client';
 import { Activity, User, Clock, AlertTriangle, Monitor, Wifi, Eye, Pause, XCircle, Flag } from 'lucide-react';
 import { interviews } from '../services/api.js';
 
-const SOCKET_URL = 'http://localhost:4000';
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:4000';
 
 export default function LiveMonitorPage() {
   const [liveEvents, setLiveEvents] = useState([]);
