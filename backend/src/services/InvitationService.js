@@ -152,9 +152,9 @@ class InvitationService {
    * Resends an existing invitation
    */
   async resendInvitation(candidateId, adminId = null) {
-    const invitation = await Invitation.findOne({ candidate: candidateId });
+    let invitation = await Invitation.findOne({ candidate: candidateId });
     if (!invitation) {
-      throw new Error('No invitation exists for candidate');
+      invitation = await this.createInvitation(candidateId);
     }
     
     // Revive invitation status if appropriate
@@ -175,9 +175,9 @@ class InvitationService {
    * automatically so they can retry.
    */
   async regenerateCode(candidateId, adminId = null, reason = '') {
-    const invitation = await Invitation.findOne({ candidate: candidateId });
+    let invitation = await Invitation.findOne({ candidate: candidateId });
     if (!invitation) {
-      throw new Error('No invitation exists for candidate');
+      invitation = await this.createInvitation(candidateId);
     }
 
     const newCode = await this.generateUniqueCode();

@@ -339,16 +339,14 @@ export default function CandidatesPage() {
                       <Link to={`/admin/candidates/${c._id}`} className="btn btn-secondary" style={{ padding: '0.375rem 0.75rem', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}>
                         <Eye size={13} /> View
                       </Link>
-                      {c.invitation && (
-                        <button 
-                          className="btn btn-secondary" 
-                          onClick={() => handleResendEmail(c._id)}
-                          style={{ padding: '0.375rem 0.75rem', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
-                          title={`Email Status: ${c.invitation.emailStatus || 'UNKNOWN'}`}
-                        >
-                          <RefreshCw size={11} /> Resend
-                        </button>
-                      )}
+                      <button 
+                        className="btn btn-secondary" 
+                        onClick={() => handleResendEmail(c._id)}
+                        style={{ padding: '0.375rem 0.75rem', fontSize: '0.8rem', display: 'inline-flex', alignItems: 'center', gap: '0.25rem' }}
+                        title={`Email Status: ${c.invitation?.emailStatus || 'UNSENT'}`}
+                      >
+                        <RefreshCw size={11} /> {c.invitation ? 'Resend' : 'Send Invite'}
+                      </button>
                     </div>
                   </td>
                 </tr>
