@@ -6,30 +6,45 @@ import InterviewTemplate from '../models/InterviewTemplate.js';
 
 export async function seedInitialData() {
   try {
-    const email = process.env.ADMIN_EMAIL || 'admin@aiinterview.com';
+    const targetEmail = (process.env.ADMIN_EMAIL || 'admin@aiinterview.com').toLowerCase().trim();
     const password = process.env.ADMIN_PASSWORD || 'AdminPassword123!';
     const name = 'Platform Admin';
 
-    console.log(`[Startup Seed] Checking if admin exists: ${email}`);
-    const existingAdmin = await Admin.findOne({ email });
+    console.log(`[Startup Seed] Checking if admin exists: ${targetEmail}`);
+    const existingAdmin = await Admin.findOne({ email: targetEmail });
 
     if (!existingAdmin) {
       console.log(`[Startup Seed] Creating new admin account...`);
       const salt = await bcrypt.genSalt(10);
       const passwordHash = await bcrypt.hash(password, salt);
 
-      const admin = new Admin({
-        email,
-        passwordHash,
-        name,
-      });
-      await admin.save();
-      console.log(`[Startup Seed] Admin created successfully!`);
+      try {
+        const admin = new Admin({
+          email: targetEmail,
+          passwordHash,
+          name,
+        });
+        await admin.save();
+        console.log(`[Startup Seed] Admin created successfully!`);
+      } catch (saveErr) {
+        if (saveErr.code === 11000) {
+          console.log(`[Startup Seed] Admin index exists (E11000), updating existing document...`);
+          const docToUpdate = await Admin.findOne({ email: targetEmail });
+          if (docToUpdate) {
+            const updateSalt = await bcrypt.genSalt(10);
+            docToUpdate.passwordHash = await bcrypt.hash(password, updateSalt);
+            await docToUpdate.save();
+            console.log(`[Startup Seed] Admin password updated successfully.`);
+          }
+        } else {
+          throw saveErr;
+        }
+      }
     } else {
-      // Verify password is correct; update if stale (e.g. after DB reset or env change)
+      // Verify password is correct; update if stale
       const passwordOk = await existingAdmin.comparePassword(password);
       if (!passwordOk) {
-        console.log(`[Startup Seed] Admin exists but password mismatch — resetting to env default...`);
+        console.log(`[Startup Seed] Admin exists but password mismatch — resetting to default...`);
         const salt = await bcrypt.genSalt(10);
         existingAdmin.passwordHash = await bcrypt.hash(password, salt);
         await existingAdmin.save();
