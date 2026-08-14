@@ -26,7 +26,17 @@ export async function seedInitialData() {
       await admin.save();
       console.log(`[Startup Seed] Admin created successfully!`);
     } else {
-      console.log(`[Startup Seed] Admin already exists.`);
+      // Verify password is correct; update if stale (e.g. after DB reset or env change)
+      const passwordOk = await existingAdmin.comparePassword(password);
+      if (!passwordOk) {
+        console.log(`[Startup Seed] Admin exists but password mismatch — resetting to env default...`);
+        const salt = await bcrypt.genSalt(10);
+        existingAdmin.passwordHash = await bcrypt.hash(password, salt);
+        await existingAdmin.save();
+        console.log(`[Startup Seed] Admin password reset successfully.`);
+      } else {
+        console.log(`[Startup Seed] Admin already exists.`);
+      }
     }
 
     // Seed Job Roles
