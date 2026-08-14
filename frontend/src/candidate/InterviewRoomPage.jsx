@@ -25,6 +25,11 @@ export default function InterviewRoomPage() {
   const [timeLeft, setTimeLeft] = useState(0);
   const [warningMsg, setWarningMsg] = useState('');
   
+  // Speech-to-text state
+  const [liveTranscript, setLiveTranscript] = useState('');
+  const [interimTranscript, setInterimTranscript] = useState('');
+  const [listening, setListening] = useState(false);
+  
   // Real-time AI response state
   const [aiState, setAiState] = useState('READY'); // READY, SPEAKING, LISTENING, PROCESSING
   const [aiText, setAiText] = useState('Welcome! Please click "Start Interview Session" when you are ready to begin.');
@@ -34,6 +39,14 @@ export default function InterviewRoomPage() {
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const timerRef = useRef(null);
+
+  const recognitionRef = useRef(null);
+  const listeningWanted = useRef(false);
+  const silenceTimerRef = useRef(null);
+  const autoSubmitPendingRef = useRef(false);
+  const finalizationStartedRef = useRef(false);
+  const isSubmittingRef = useRef(false);
+  const isTtsPlayingRef = useRef(false);
 
   const invitationId = sessionStorage.getItem('invitationId');
   const candidateId = sessionStorage.getItem('candidateId');
@@ -147,8 +160,13 @@ export default function InterviewRoomPage() {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
       clearInterval(timerRef.current);
       if (socketRef.current) socketRef.current.disconnect();
+      stopSpeech();
+      speechSynthesis?.cancel();
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+      }
     };
-  }, [invitationId]);
+  }, [invitationId, stopSpeech]);
 
   // Trigger integrity alert on backend and emit real-time event
   const triggerIntegrityAlert = async (type, details) => {
@@ -201,76 +219,162 @@ export default function InterviewRoomPage() {
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
 
-  // Begin interview flow
-  const handleStartInterview = async () => {
-    if (!session) return;
-    setStartingLoading(true);
-    setStartingError('');
-    setAiState('PROCESSING');
-    setAiText('Configuring environment and fetching initial question...');
-    try {
+  // Speech-to-text controls
+  const stopSpeech = useCallback(() => {
+    listeningWanted.current = false;
+    if (recognitionRef.current) {
       try {
-        document.documentElement.requestFullscreen().catch(() => {});
-      } catch {}
+        recognitionRef.current.stop();
+      } catch (err) {
+        console.error('stopSpeech error:', err);
+      }
+    }
+    setListening(false);
+  }, []);
 
-      // If we already pre-fetched the first question in init():
-      if (currentQuestion) {
-        setStarting(false);
-        setAiState('SPEAKING');
-        setAiText(currentQuestion.text);
+  const resetSilenceTimer = useCallback(() => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+    }
+    silenceTimerRef.current = setTimeout(() => {
+      console.log('[Silence Detector] 5 seconds of silence, auto-submitting...');
+      autoSubmitAnswer();
+    }, 5000);
+  }, []);
 
-        try {
-          window.speechSynthesis.cancel();
-          const utterance = new SpeechSynthesisUtterance(currentQuestion.text);
-          utterance.onend = () => {
-            setAiState('READY');
-          };
-          window.speechSynthesis.speak(utterance);
-        } catch (speechErr) {
-          console.error('TTS failed:', speechErr);
-          setAiState('READY');
-        }
+  const autoSubmitAnswer = () => {
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
+      autoSubmitPendingRef.current = true;
+      mediaRecorderRef.current.stop();
+    } else {
+      console.warn('[Silence Detector] MediaRecorder not active on silence timeout, submitting empty answer.');
+      const dummyBlob = new Blob([], { type: 'audio/wav' });
+      performSubmitAnswer(dummyBlob, '');
+    }
+  };
+
+  async function performSubmitAnswer(blobToSubmit, transcriptText) {
+    if (isSubmittingRef.current || !session || !currentQuestion) return;
+    isSubmittingRef.current = true;
+
+    // Clear silence timer immediately
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+
+    // Stop speech recognition during submission
+    stopSpeech();
+
+    setSendingAnswer(true);
+    setAiState('PROCESSING');
+    setAiText('Processing response and analyzing transcript...');
+    const idempotencyKey = crypto.randomUUID();
+
+    try {
+      const responseFile = new File([blobToSubmit], 'response.wav', { type: 'audio/wav' });
+      await interviews.submitAnswer({
+        sessionId: session._id,
+        questionIndex: currentQuestion.questionIndex,
+        remainingTimeSeconds: timeLeft,
+        audioBlob: responseFile,
+        idempotencyKey,
+      });
+
+      // Reset transcripts
+      setLiveTranscript('');
+      setInterimTranscript('');
+
+      // Get next question
+      const res = await interviews.nextQuestion(session._id);
+      if (res.data.isCompleted) {
+        setAiState('COMPLETED');
+        setAiText('Excellent work! You have completed all questions in the interview.');
+        setCurrentQuestion(null);
+        await handleEndInterview();
       } else {
-        // Fallback next question fetch
-        const res = await interviews.nextQuestion(session._id);
-        const firstQuestion = {
+        const nextQ = {
           questionIndex: res.data.questionIndex,
           text: res.data.question,
           category: res.data.category || 'technical',
           topic: res.data.topic || 'General',
           difficulty: res.data.difficulty || '3',
         };
-
-        setCurrentQuestion(firstQuestion);
-        setStarting(false);
-        setAiState('SPEAKING');
-        setAiText(res.data.question);
-
-        try {
-          window.speechSynthesis.cancel();
-          const utterance = new SpeechSynthesisUtterance(res.data.question);
-          utterance.onend = () => {
-            setAiState('READY');
-          };
-          window.speechSynthesis.speak(utterance);
-        } catch (speechErr) {
-          console.error('TTS failed:', speechErr);
-          setAiState('READY');
-        }
+        setCurrentQuestion(nextQ);
+        playQuestionSpeech(res.data.question);
       }
-
+      setAudioBlob(null);
+      setAudioUrl(null);
     } catch (err) {
-      console.error(err);
-      setStartingError('Failed to start interview session. Please retry.');
-      setAiText('Failed to start interview. Please retry.');
+      console.error('Submit answer error:', err);
+      setAiText('An error occurred submitting your answer. Let\'s retry.');
       setAiState('READY');
     } finally {
-      setStartingLoading(false);
+      isSubmittingRef.current = false;
+      setSendingAnswer(false);
     }
-  };
+  }
 
-  // Audio Recording Flow
+  const startSpeech = useCallback(() => {
+    if (isTtsPlayingRef.current) return;
+
+    const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!Recognition) {
+      console.warn('Live speech recognition not supported in this browser.');
+      return;
+    }
+
+    if (!recognitionRef.current) {
+      const r = new Recognition();
+      r.continuous = true;
+      r.interimResults = true;
+      r.lang = 'en-IN';
+      r.onresult = (event) => {
+        if (isTtsPlayingRef.current) return;
+
+        let finalText = '';
+        let interimText = '';
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const text = event.results[i][0].transcript;
+          if (event.results[i].isFinal) finalText += text;
+          else interimText += text;
+        }
+        if (finalText) setLiveTranscript(prev => `${prev} ${finalText}`.trim());
+        setInterimTranscript(interimText);
+
+        // Reset silence timer on speech detection
+        resetSilenceTimer();
+      };
+      r.onerror = (event) => {
+        if (event.error !== 'no-speech') {
+          console.error('Speech recognition error:', event.error);
+        }
+      };
+      r.onend = () => {
+        setListening(false);
+        if (listeningWanted.current && !isTtsPlayingRef.current) {
+          setTimeout(() => {
+            try {
+              if (listeningWanted.current && !isTtsPlayingRef.current) {
+                r.start();
+                setListening(true);
+              }
+            } catch {}
+          }, 350);
+        }
+      };
+      recognitionRef.current = r;
+    }
+
+    listeningWanted.current = true;
+    try {
+      recognitionRef.current.start();
+      setListening(true);
+    } catch {}
+  }, [resetSilenceTimer]);
+
   const startAudioRecord = async () => {
+    isTtsPlayingRef.current = false;
     setAudioUrl(null);
     setAudioBlob(null);
     audioChunksRef.current = [];
@@ -286,97 +390,149 @@ export default function InterviewRoomPage() {
         setAudioUrl(URL.createObjectURL(blob));
         // Stop audio tracks
         stream.getTracks().forEach(track => track.stop());
+
+        if (autoSubmitPendingRef.current) {
+          autoSubmitPendingRef.current = false;
+          const combinedTranscript = [liveTranscript, interimTranscript].filter(Boolean).join(' ').trim();
+          performSubmitAnswer(blob, combinedTranscript);
+        }
       };
       mediaRecorderRef.current.start();
       setRecording(true);
       setAiState('LISTENING');
+
+      // Clear transcripts
+      setLiveTranscript('');
+      setInterimTranscript('');
+      
+      // Start live transcription
+      startSpeech();
+
+      // Start silence timer
+      resetSilenceTimer();
     } catch (e) {
-      alert('Microphone access issue.');
+      alert('Microphone access issue. Please enable mic permissions.');
     }
   };
 
   const stopAudioRecord = () => {
     if (mediaRecorderRef.current && recording) {
+      if (silenceTimerRef.current) {
+        clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = null;
+      }
       mediaRecorderRef.current.stop();
       setRecording(false);
       setAiState('READY');
     }
   };
 
-  // Submit Answer & Request Next Question
-  const handleSubmitAnswer = async () => {
-    if (!audioBlob || !session || !currentQuestion) return;
-    setSendingAnswer(true);
-    setAiState('PROCESSING');
-    setAiText('Processing response and analyzing transcript...');
-    try {
-      const responseFile = new File([audioBlob], 'response.wav', { type: 'audio/wav' });
-      await interviews.submitAnswer({
-        sessionId: session._id,
-        questionIndex: currentQuestion.questionIndex,
-        remainingTimeSeconds: timeLeft,
-        audioBlob: responseFile,
-      });
+  const playQuestionSpeech = (text) => {
+    isTtsPlayingRef.current = true;
+    stopSpeech();
+    setAiState('SPEAKING');
+    setAiText(text);
 
-      // Get next question
-      const res = await interviews.nextQuestion(session._id);
-      if (res.data.isCompleted) {
-        setAiState('COMPLETED');
-        setAiText('Excellent work! You have completed all questions in the interview.');
-        setCurrentQuestion(null);
+    try {
+      window.speechSynthesis.cancel();
+      const utterance = new SpeechSynthesisUtterance(text);
+
+      utterance.onend = () => {
+        isTtsPlayingRef.current = false;
+        setAiState('READY');
+        
+        // Start candidate recording ONLY after the AI speech has completely finished!
+        startAudioRecord();
+      };
+
+      utterance.onerror = (err) => {
+        console.error('SpeechSynthesis error:', err);
+        isTtsPlayingRef.current = false;
+        setAiState('READY');
+        startAudioRecord();
+      };
+
+      window.speechSynthesis.speak(utterance);
+    } catch (speechErr) {
+      console.error('TTS failed:', speechErr);
+      isTtsPlayingRef.current = false;
+      setAiState('READY');
+      startAudioRecord();
+    }
+  };
+
+  // Begin interview flow
+  const handleStartInterview = async () => {
+    if (!session) return;
+    setStartingLoading(true);
+    setStartingError('');
+    setAiState('PROCESSING');
+    setAiText('Configuring environment and fetching initial question...');
+    try {
+      try {
+        document.documentElement.requestFullscreen().catch(() => {});
+      } catch {}
+
+      if (currentQuestion) {
+        setStarting(false);
+        playQuestionSpeech(currentQuestion.text);
       } else {
-        const nextQ = {
+        const res = await interviews.nextQuestion(session._id);
+        const firstQuestion = {
           questionIndex: res.data.questionIndex,
           text: res.data.question,
           category: res.data.category || 'technical',
           topic: res.data.topic || 'General',
           difficulty: res.data.difficulty || '3',
         };
-        setCurrentQuestion(nextQ);
-        setAiState('SPEAKING');
-        setAiText(res.data.question);
-
-        try {
-          window.speechSynthesis.cancel();
-          const utterance = new SpeechSynthesisUtterance(res.data.question);
-          utterance.onend = () => {
-            setAiState('READY');
-          };
-          window.speechSynthesis.speak(utterance);
-        } catch (speechErr) {
-          console.error('TTS failed:', speechErr);
-          setAiState('READY');
-        }
+        setCurrentQuestion(firstQuestion);
+        setStarting(false);
+        playQuestionSpeech(res.data.question);
       }
-      setAudioBlob(null);
-      setAudioUrl(null);
     } catch (err) {
       console.error(err);
-      setAiText('An error occurred submitting your answer. Let\'s retry.');
+      setStartingError('Failed to start interview session. Please retry.');
+      setAiText('Failed to start interview. Please retry.');
       setAiState('READY');
     } finally {
-      setSendingAnswer(false);
+      setStartingLoading(false);
     }
   };
 
-  const handleEndInterview = async () => {
-    if (!session) return;
+  const handleSubmitAnswer = async () => {
+    if (audioBlob) {
+      const combinedTranscript = [liveTranscript, interimTranscript].filter(Boolean).join(' ').trim();
+      await performSubmitAnswer(audioBlob, combinedTranscript);
+    }
+  };
+
+  async function handleEndInterview() {
+    if (!session || finalizationStartedRef.current) return;
+    finalizationStartedRef.current = true;
+    stopSpeech();
+    speechSynthesis?.cancel();
+
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+
     try {
       await interviews.complete(session._id);
       setAiState('COMPLETED');
       setAiText('Interview finished successfully. Your responses are being evaluated.');
       setTimeout(() => {
         if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
-        // Interview is fully done — clear this session's data and send the
-        // candidate back to the main invitation-code entry page, not the
-        // pre-interview checklist (which no longer applies once completed).
         sessionStorage.clear();
         navigate('/interview?completed=1', { replace: true });
       }, 5000);
     } catch (e) {
-      console.error(e);
+      console.error('Error during finalization:', e);
+      if (document.fullscreenElement) document.exitFullscreen().catch(() => {});
+      sessionStorage.clear();
+      navigate('/interview?completed=1', { replace: true });
     }
-  };
+  }
 
   const aiColors = {
     READY: 'var(--text-secondary)',
@@ -478,18 +634,17 @@ export default function InterviewRoomPage() {
               </button>
             </div>
           ) : aiState === 'COMPLETED' ? (
-            <div style={{ textAlign: 'center' }}>
-              <button className="btn btn-success" onClick={handleEndInterview} style={{ padding: '0.875rem 2.5rem', fontSize: '1.05rem' }}>
-                <CheckCircle2 size={18} /> Finalize Assessment
-              </button>
+            <div style={{ textAlign: 'center', padding: '1.25rem', background: 'rgba(16,185,129,0.1)', borderRadius: 12, border: '1px solid var(--success)', color: 'var(--success)' }}>
+              <Loader size={20} className="animate-spin" style={{ margin: '0 auto 0.5rem' }} />
+              <strong>Finalizing Assessment... Please do not close this window.</strong>
             </div>
           ) : (
             <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
               {!recording && !audioUrl ? (
                 // Only show Record Answer if session is STARTED/RECOVERING, question is loaded, and AI is done speaking
                 (session?.status === 'STARTED' || session?.status === 'RECOVERING') && currentQuestion && aiState !== 'SPEAKING' && aiState !== 'PROCESSING' ? (
-                  <button className="btn btn-primary" onClick={startAudioRecord} style={{ flex: 1, padding: '0.875rem' }}>
-                    <Mic size={18} style={{ marginRight: '0.5rem' }} /> Record Answer
+                  <button className="btn btn-primary" disabled style={{ flex: 1, padding: '0.875rem', opacity: 0.8, cursor: 'not-allowed' }}>
+                    <Mic size={18} style={{ marginRight: '0.5rem' }} /> Listening for your answer...
                   </button>
                 ) : (aiState === 'SPEAKING' || aiState === 'PROCESSING') ? (
                   <div style={{ flex: 1, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: '0.95rem', fontStyle: 'italic', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
@@ -498,23 +653,59 @@ export default function InterviewRoomPage() {
                   </div>
                 ) : null
               ) : recording ? (
-                <button className="btn btn-danger" onClick={stopAudioRecord} style={{ flex: 1, padding: '0.875rem' }}>
-                  <Square size={18} style={{ marginRight: '0.5rem' }} /> Stop Recording
+                <button className="btn btn-danger" disabled style={{ flex: 1, padding: '0.875rem', opacity: 0.8, cursor: 'not-allowed' }}>
+                  <Square size={18} style={{ marginRight: '0.5rem' }} /> Recording Answer... (Silence Detection Active)
                 </button>
               ) : (
                 <div style={{ display: 'flex', gap: '1rem', width: '100%' }}>
-                  <audio src={audioUrl} controls style={{ flex: 1, height: 40 }} />
-                  <button className="btn btn-secondary" onClick={() => { setAudioUrl(null); setAudioBlob(null); }} style={{ padding: '0 1.25rem' }}>
-                    Retake
-                  </button>
-                  <button className="btn btn-primary" onClick={handleSubmitAnswer} disabled={sendingAnswer} style={{ padding: '0 2rem' }}>
-                    {sendingAnswer ? 'Sending...' : <><Send size={18} /> Submit Answer</>}
-                  </button>
+                  <div style={{ flex: 1, background: 'rgba(37,99,235,0.1)', border: '1px solid var(--primary)', borderRadius: 8, padding: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)' }}>
+                    <Loader size={16} className="animate-spin" style={{ marginRight: '0.5rem' }} />
+                    Auto-submitting answer...
+                  </div>
                 </div>
               )}
             </div>
           )}
         </div>
+
+        {/* Live Speech-to-Text Transcript */}
+        {!starting && aiState !== 'COMPLETED' && (
+          <div style={{ marginTop: '1rem', borderTop: '1px solid #1f1f28', paddingTop: '1rem' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+              <span style={{ fontSize: '0.75rem', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>
+                {listening ? '🔴 Live Transcript (Listening...)' : 'Live Transcript'}
+              </span>
+              <button
+                onClick={listening ? stopSpeech : startSpeech}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: '0.3rem',
+                  padding: '0.3rem 0.7rem', borderRadius: 6, fontSize: '0.75rem', fontWeight: 600,
+                  border: `1px solid ${listening ? '#ef4444' : '#374151'}`,
+                  background: listening ? 'rgba(239,68,68,0.1)' : 'transparent',
+                  color: listening ? '#ef4444' : '#9ca3af', cursor: 'pointer',
+                }}
+              >
+                {listening ? 'Pause Transcript' : 'Resume Transcript'}
+              </button>
+            </div>
+            <div style={{
+              background: '#070709', border: '1px solid #17171f', borderRadius: 8,
+              padding: '0.875rem 1rem', minHeight: 60, fontSize: '0.9rem', color: '#e4e4e7',
+              lineHeight: '1.5',
+            }}>
+              {liveTranscript || interimTranscript ? (
+                <>
+                  <span>{liveTranscript}</span>
+                  {interimTranscript && (
+                    <span style={{ color: '#8b5cf6', fontStyle: 'italic' }}> {interimTranscript}</span>
+                  )}
+                </>
+              ) : (
+                <span style={{ color: 'var(--text-tertiary)', fontStyle: 'italic' }}>Silence or waiting for you to speak...</span>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Right Sidebar - Camera & Video Monitor */}

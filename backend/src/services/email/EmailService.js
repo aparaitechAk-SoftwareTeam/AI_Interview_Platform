@@ -2,7 +2,8 @@ import nodemailer from 'nodemailer';
 import { 
   invitationTemplate, 
   approvalTemplate, 
-  rejectionTemplate 
+  rejectionTemplate,
+  decisionTemplate
 } from './templates.js';
 
 class EmailService {
@@ -117,6 +118,22 @@ class EmailService {
     if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) {
       console.error(`[EMAIL] Attempted to send to invalid email address: "${to}"`);
       return { success: false, error: 'Invalid recipient email address' };
+    }
+
+    // Fallback Mock Sender for development / testing / unconfigured environments
+    const isApiKeyPlaceholder = process.env.BREVO_API_KEY && this._isPlaceholder(process.env.BREVO_API_KEY);
+    const isSmtpPlaceholder = this.host && this._isPlaceholder(this.host);
+    const isUnconfigured = !this.isConfigured || isApiKeyPlaceholder || isSmtpPlaceholder;
+
+    if (isUnconfigured || process.env.NODE_ENV === 'test' || process.env.MAIL_PROVIDER === 'development') {
+      console.log(`[EMAIL] [MOCK MODE] Simulating dispatch to ${to}`);
+      console.log(`   Subject: "${subject}"`);
+      return { 
+        success: true, 
+        mock: true, 
+        emailStatus: 'DEVELOPMENT_PREVIEW',
+        messageId: `mock-${Date.now()}-${Math.random().toString(36).substring(2, 9)}` 
+      };
     }
 
     // 1. SMTP Provider
@@ -244,17 +261,31 @@ class EmailService {
     return this.sendInvitationEmail(candidate, inviteCode, inviteLink);
   }
 
-  async sendDecisionUpdate(candidate, decision, feedback) {
-    if (decision === 'APPROVED') {
-      return this.sendApprovalEmail(candidate, 0);
-    } else if (decision === 'REJECTED') {
-      return this.sendRejectionEmail(candidate, 0);
+  async sendDecisionEmail(candidate, decision, feedback) {
+    const nextStepsMap = {
+      APPROVED: "Congratulations! You have successfully cleared the interview. Our HR team will contact you shortly to schedule the final round/onboarding.",
+      REJECTED: "Thank you for your interest and the time you invested in this process. While we are not moving forward at this time, we will keep your profile in our candidate registry for future opportunities.",
+      HOLD: "Your application is currently under review/on hold. We are processing multiple candidates and will follow up with an update within 2-3 days.",
+      REINTERVIEW: "The hiring team has requested another interview/reassessment to better evaluate your skills. Please check your dashboard or wait for further scheduling instructions."
+    };
+
+    const nextSteps = nextStepsMap[decision] || "Our recruitment team will follow up with you shortly.";
+    const subject = decisionTemplate.subject(decision);
+    const html = decisionTemplate.html(candidate.name, decision, feedback, nextSteps);
+    const text = decisionTemplate.text(candidate.name, decision, feedback, nextSteps);
+
+    console.log(`[EMAIL] Sending decision email (${decision}) to ${candidate.email}`);
+    const result = await this.sendEmail({ to: candidate.email, subject, html, text });
+    if (result.success) {
+      console.log(`[EMAIL] Decision email (${decision}) sent successfully to ${candidate.email}`);
     } else {
-      const subject = `Update on your interview — application on hold`;
-      const text = `Hello ${candidate.name},\n\nYour application is currently on hold. We will get back to you shortly.\n\nBest regards,\nAparaitech Recruitment`;
-      const html = `<p>Hello <strong>${candidate.name}</strong>,</p><p>Your application is currently on hold. We will get back to you shortly.</p><p>Best regards,<br>Aparaitech Recruitment</p>`;
-      return this.sendEmail({ to: candidate.email, subject, html, text });
+      console.log(`[EMAIL] Failed to send decision email (${decision}) to ${candidate.email}: ${result.error}`);
     }
+    return result;
+  }
+
+  async sendDecisionUpdate(candidate, decision, feedback) {
+    return this.sendDecisionEmail(candidate, decision, feedback);
   }
 
   async sendFollowUp(candidate, decision) {

@@ -264,3 +264,61 @@ Aparaitech Software
 AI Interview Platform
 `
 };
+
+export const decisionTemplate = {
+  subject: (decision) => `AI Interview Result - Update on your status (${decision === 'APPROVED' ? 'ACCEPTED' : decision})`,
+  html: (candidateName, decision, feedback, nextSteps) => getHtmlLayout(`
+    <p>Hello <strong>${candidateName}</strong>,</p>
+    <p>Your AI interview has been reviewed by our hiring team.</p>
+    
+    <div class="info-box">
+      <table>
+        <tr>
+          <td class="label">Interview Status:</td>
+          <td class="value"><span class="code-badge" style="background-color: ${
+            decision === 'APPROVED' ? '#d1fae5' :
+            decision === 'REJECTED' ? '#fee2e2' :
+            decision === 'HOLD' ? '#fef3c7' : '#f3e8ff'
+          }; color: ${
+            decision === 'APPROVED' ? '#065f46' :
+            decision === 'REJECTED' ? '#991b1b' :
+            decision === 'HOLD' ? '#92400e' : '#6b21a8'
+          }; padding: 6px 12px; border-radius: 6px; font-weight: 800;">${
+            decision === 'APPROVED' ? 'ACCEPTED / SHORTLISTED' :
+            decision === 'REJECTED' ? 'NOT SELECTED' :
+            decision === 'HOLD' ? 'ON HOLD' : 'RE-INTERVIEW REQUIRED'
+          }</span></td>
+        </tr>
+      </table>
+    </div>
+
+    ${feedback ? `
+    <p><strong>Feedback from the hiring team:</strong></p>
+    <blockquote style="margin: 16px 0; padding: 12px 16px; background-color: #f8fafc; border-left: 4px solid #3b82f6; font-style: italic; color: #475569;">
+      "${feedback}"
+    </blockquote>
+    ` : ''}
+
+    <p><strong>Next Steps:</strong></p>
+    <p>${nextSteps}</p>
+
+    <p style="margin-top: 32px;">Best regards,<br><strong>Aparaitech Software Team</strong></p>
+  `),
+  text: (candidateName, decision, feedback, nextSteps) => `
+Hello ${candidateName},
+
+Your AI interview has been reviewed by our hiring team.
+
+Interview Status: ${decision === 'APPROVED' ? 'ACCEPTED' : decision}
+
+Feedback:
+${feedback || 'No feedback provided.'}
+
+Next Steps:
+${nextSteps}
+
+Best regards,
+Aparaitech Software
+AI Interview Platform
+`
+};

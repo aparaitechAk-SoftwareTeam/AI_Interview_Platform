@@ -10,6 +10,8 @@ export default function AdminLogin() {
   const [showPw, setShowPw] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [emailType, setEmailType] = useState('text');
+  const [passType, setPassType] = useState('text');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -77,17 +79,25 @@ export default function AdminLogin() {
           </div>
         )}
 
-        <form onSubmit={handleSubmit}>
+        <form onSubmit={handleSubmit} autoComplete="off">
+          {/* Dummy inputs to trap Chrome's password manager autofill on page load */}
+          <div style={{ opacity: 0, position: 'absolute', height: 0, width: 0, overflow: 'hidden', zIndex: -1 }} aria-hidden="true">
+            <input type="text" name="email_dummy" autoComplete="username" tabIndex="-1" />
+            <input type="password" name="password_dummy" autoComplete="current-password" tabIndex="-1" />
+          </div>
+
           <div className="form-group">
             <label className="form-label">Email Address</label>
             <input
-              type="email"
+              type={emailType}
               className="form-input"
-              placeholder="admin@aiinterview.com"
+              placeholder="Enter your email"
               value={form.email}
               onChange={(e) => setForm({ ...form, email: e.target.value })}
+              onFocus={() => setEmailType('email')}
               required
               autoFocus
+              autoComplete="off"
             />
           </div>
 
@@ -95,13 +105,15 @@ export default function AdminLogin() {
             <label className="form-label">Password</label>
             <div style={{ position: 'relative' }}>
               <input
-                type={showPw ? 'text' : 'password'}
+                type={showPw ? 'text' : passType}
                 className="form-input"
                 placeholder="Enter your password"
                 value={form.password}
                 onChange={(e) => setForm({ ...form, password: e.target.value })}
+                onFocus={() => setPassType('password')}
                 required
                 style={{ paddingRight: '3rem' }}
+                autoComplete="new-password"
               />
               <button
                 type="button"
@@ -131,12 +143,6 @@ export default function AdminLogin() {
             ) : 'Sign In to Admin Portal'}
           </button>
         </form>
-
-        <div style={{ marginTop: '1.5rem', padding: '1rem', background: 'var(--bg-tertiary)', borderRadius: 10, fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>
-          <strong style={{ color: 'var(--text-secondary)' }}>Development Mode:</strong><br />
-          Email: admin@aiinterview.com<br />
-          Password: AdminPassword123!
-        </div>
       </div>
 
       <style>{`

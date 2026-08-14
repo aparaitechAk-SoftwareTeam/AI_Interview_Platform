@@ -12,7 +12,7 @@ const router = express.Router();
 // Admin decides result status (APPROVE, HOLD, REJECT)
 router.post('/decide', protectAdmin, async (req, res, next) => {
   try {
-    const { sessionId, decision, feedback } = req.body; // 'APPROVED' | 'HOLD' | 'REJECTED'
+    const { sessionId, decision, feedback, adminComment, candidateFeedback, reinterviewNote } = req.body; // 'APPROVED' | 'HOLD' | 'REJECTED' | 'REINTERVIEW'
 
     if (!sessionId || !decision) {
       return res.status(400).json({ success: false, message: 'Session ID and decision status are required' });
@@ -32,6 +32,7 @@ router.post('/decide', protectAdmin, async (req, res, next) => {
     if (decision === 'APPROVED') pipelineStage = 'SHORTLISTED';
     else if (decision === 'HOLD') pipelineStage = 'HOLD';
     else if (decision === 'REJECTED') pipelineStage = 'REJECTED';
+    else if (decision === 'REINTERVIEW') pipelineStage = 'REINTERVIEW';
 
     const oldStatus = session.status;
     session.adminNote = feedback || '';
@@ -42,7 +43,7 @@ router.post('/decide', protectAdmin, async (req, res, next) => {
     candidate.pipelineHistory.push({
       stage: pipelineStage,
       changedBy: req.admin._id,
-      note: `Admin review decision: ${decision}. Feedback: ${feedback || 'None'}`,
+      note: `Admin review decision: ${decision}. Feedback: ${candidateFeedback || feedback || 'None'}`,
     });
     await candidate.save();
 
@@ -52,7 +53,27 @@ router.post('/decide', protectAdmin, async (req, res, next) => {
       ? new Date(Date.now() + (2 + Math.random()) * 24 * 60 * 60 * 1000) // ~2-3 days out
       : undefined;
 
-    // Notify the candidate by email about the recruiter's decision
+    // 1. Create or update Result document FIRST
+    const resultDoc = await Result.findOneAndUpdate(
+      { candidate: candidate._id },
+      {
+        interviewSession: session._id,
+        status: decision,
+        scores: session.scores,
+        feedback: feedback || '',
+        adminComment: adminComment || '',
+        candidateFeedback: candidateFeedback || '',
+        reinterviewNote: reinterviewNote || '',
+        decidedBy: req.admin._id,
+        decidedAt: new Date(),
+        decisionEmailStatus: 'PENDING',
+        followUpDueAt,
+        followUpSent: false,
+      },
+      { upsert: true, new: true }
+    );
+
+    // 2. Now attempt to send the email notification
     const emailService = getEmailService();
     let decisionEmailStatus = 'PENDING';
     const overallScore = session.scores?.overall || 0;
@@ -63,7 +84,7 @@ router.post('/decide', protectAdmin, async (req, res, next) => {
           console.log(`[Results] Approval email already sent to ${candidate.email}, skipping.`);
           decisionEmailStatus = 'SENT';
         } else {
-          const emailResult = await emailService.sendApprovalEmail(candidate, overallScore);
+          const emailResult = await emailService.sendDecisionEmail(candidate, decision, candidateFeedback || feedback || '');
           if (emailResult.success) {
             decisionEmailStatus = 'SENT';
             candidate.approvalEmailSent = true;
@@ -78,7 +99,7 @@ router.post('/decide', protectAdmin, async (req, res, next) => {
           console.log(`[Results] Rejection email already sent to ${candidate.email}, skipping.`);
           decisionEmailStatus = 'SENT';
         } else {
-          const emailResult = await emailService.sendRejectionEmail(candidate, overallScore);
+          const emailResult = await emailService.sendDecisionEmail(candidate, decision, candidateFeedback || feedback || '');
           if (emailResult.success) {
             decisionEmailStatus = 'SENT';
             candidate.rejectionEmailSent = true;
@@ -89,7 +110,7 @@ router.post('/decide', protectAdmin, async (req, res, next) => {
           }
         }
       } else {
-        const emailResult = await emailService.sendDecisionUpdate(candidate, decision, feedback);
+        const emailResult = await emailService.sendDecisionEmail(candidate, decision, candidateFeedback || feedback || '');
         decisionEmailStatus = emailResult.success ? 'SENT' : 'FAILED';
       }
     } catch (emailErr) {
@@ -97,22 +118,9 @@ router.post('/decide', protectAdmin, async (req, res, next) => {
       decisionEmailStatus = 'FAILED';
     }
 
-    // Create or update Result document
-    await Result.findOneAndUpdate(
-      { candidate: candidate._id },
-      {
-        interviewSession: session._id,
-        status: decision,
-        scores: session.scores,
-        feedback: feedback || '',
-        decidedBy: req.admin._id,
-        decidedAt: new Date(),
-        decisionEmailStatus,
-        followUpDueAt,
-        followUpSent: false,
-      },
-      { upsert: true, new: true }
-    );
+    // Update Result document with final email status
+    resultDoc.decisionEmailStatus = decisionEmailStatus;
+    await resultDoc.save();
 
     // In-app notification so the candidate also sees the status change, not just email
     await Notification.create({
