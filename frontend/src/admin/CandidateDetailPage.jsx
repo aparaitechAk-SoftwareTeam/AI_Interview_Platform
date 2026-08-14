@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { candidates, reports, results } from '../services/api.js';
 import {
-  ArrowLeft, Copy, Mail, Clock, RefreshCw, CheckCircle,
+  ArrowLeft, Copy, Mail, Clock, RefreshCw, CheckCircle, Video, MessageSquare,
   AlertTriangle, User, FileText, Star, BarChart2, Eye, PlayCircle, KeyRound
 } from 'lucide-react';
 
@@ -18,6 +18,7 @@ export default function CandidateDetailPage() {
   const [releasing, setReleasing] = useState(false);
   const [regenerating, setRegenerating] = useState(false);
   const [actionMsg, setActionMsg] = useState('');
+  const [retryingWhatsApp, setRetryingWhatsApp] = useState(false);
 
   const fetch = async () => {
     setLoading(true);
@@ -99,6 +100,23 @@ export default function CandidateDetailPage() {
     : null;
 
   const scoreColors = { technical: '#2563eb', resume: '#7c3aed', communication: '#10b981', hr: '#f59e0b', problemSolving: '#ef4444', aptitude: '#06b6d4' };
+
+  const handleRetryWhatsApp = async () => {
+    setRetryingWhatsApp(true);
+    try {
+      const res = await candidates.retryWhatsApp(id);
+      if (res.data.success) {
+        alert(res.data.message || 'WhatsApp invitation sent successfully!');
+      } else {
+        alert(res.data.message || 'WhatsApp configuration required or delivery failed.');
+      }
+      fetch();
+    } catch (err) {
+      alert(err.response?.data?.message || 'Failed to send WhatsApp message');
+    } finally {
+      setRetryingWhatsApp(false);
+    }
+  };
 
   return (
     <div>
@@ -227,6 +245,45 @@ export default function CandidateDetailPage() {
             </div>
           )}
 
+          {/* Proctoring Video Recording Stream Player */}
+          {session && (
+            <div className="card">
+              <h3 style={{ fontSize: '1rem', marginBottom: '1rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                <Video size={16} color="var(--primary)" /> Proctoring Video Recording
+              </h3>
+              <div style={{ background: '#000', borderRadius: 8, overflow: 'hidden', marginBottom: '0.75rem', aspectRatio: '16/9' }}>
+                <video
+                  controls
+                  style={{ width: '100%', height: '100%', objectFit: 'contain' }}
+                  src={`${import.meta.env.VITE_API_URL || 'http://localhost:4000/api'}/interviews/${session._id}/recording`}
+                />
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem', color: 'var(--text-tertiary)' }}>
+                <span>Proctoring Stream: <strong style={{ color: 'var(--success)' }}>Active / Ready</strong></span>
+                <button
+                  className="btn btn-secondary"
+                  style={{ fontSize: '0.75rem', padding: '0.25rem 0.5rem', color: 'var(--error)' }}
+                  onClick={async () => {
+                    if (window.confirm('Delete proctoring recording for this interview session?')) {
+                      try {
+                        const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:4000/api';
+                        const token = localStorage.getItem('adminToken');
+                        await fetch(`${API_BASE}/interviews/${session._id}/recording`, {
+                          method: 'DELETE',
+                          headers: { Authorization: `Bearer ${token}` }
+                        });
+                        alert('Recording deleted successfully.');
+                        fetch();
+                      } catch (e) { alert('Failed to delete recording.'); }
+                    }
+                  }}
+                >
+                  Delete Video
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Admin Notes */}
           <div className="card">
             <h3 style={{ fontSize: '1rem', marginBottom: '1rem' }}>Admin Notes</h3>
@@ -307,14 +364,24 @@ export default function CandidateDetailPage() {
                   This code has already been used and is now locked (single-use).
                 </p>
               )}
-              <button
-                className="btn btn-secondary"
-                onClick={handleRegenerateCode}
-                disabled={regenerating}
-                style={{ width: '100%', marginTop: '1rem', fontSize: '0.85rem' }}
-              >
-                <KeyRound size={14} /> {regenerating ? 'Generating...' : 'Regenerate Code'}
-              </button>
+              <div style={{ display: 'flex', gap: '0.5rem', marginTop: '1rem' }}>
+                <button
+                  className="btn btn-secondary"
+                  onClick={handleRegenerateCode}
+                  disabled={regenerating}
+                  style={{ flex: 1, fontSize: '0.85rem' }}
+                >
+                  <KeyRound size={14} /> {regenerating ? 'Generating...' : 'Regenerate Code'}
+                </button>
+                <button
+                  className="btn btn-secondary"
+                  onClick={handleRetryWhatsApp}
+                  disabled={retryingWhatsApp}
+                  style={{ flex: 1, fontSize: '0.85rem', color: '#16a34a' }}
+                >
+                  <MessageSquare size={14} /> {retryingWhatsApp ? 'Sending...' : 'Retry WhatsApp'}
+                </button>
+              </div>
             </div>
           ) : (
             <div className="card" style={{ textAlign: 'center', color: 'var(--text-tertiary)' }}>

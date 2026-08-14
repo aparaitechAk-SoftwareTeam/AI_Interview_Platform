@@ -55,6 +55,14 @@ export const candidates = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
+  getRegistry: () => API.get('/candidates/registry'),
+  retryWhatsApp: (id) => API.post(`/candidates/${id}/retry-whatsapp`),
+  bulkDelete: (ids) => API.post('/candidates/bulk-delete', { candidateIds: ids }),
+};
+
+export const settings = {
+  get: () => API.get('/admin/settings'),
+  update: (data) => API.put('/admin/settings', data),
 };
 
 export const jobRoles = {

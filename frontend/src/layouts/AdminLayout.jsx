@@ -20,6 +20,7 @@ const navItems = [
   { label: 'Analytics', icon: BarChart2, to: '/admin/analytics' },
   { label: 'Notifications', icon: Bell, to: '/admin/notifications' },
   { label: 'Audit Log', icon: ClipboardList, to: '/admin/audit-log' },
+  { label: 'Settings', icon: Settings, to: '/admin/settings' },
 ];
 
 export default function AdminLayout({ children }) {

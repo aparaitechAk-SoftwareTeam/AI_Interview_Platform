@@ -71,7 +71,59 @@ router.get('/', async (req, res, next) => {
       })
     );
 
-    res.status(200).json({ success: true, count: results.length, data: results });
+    res.status(200).json({ success: true, count: results.length, data: results, candidates: results });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Candidate Registry Overview (Pipeline counts & grouped list)
+router.get('/registry', async (req, res, next) => {
+  try {
+    const candidates = await Candidate.find({ isActive: true })
+      .populate('jobRole', 'name')
+      .populate('campaign', 'name')
+      .sort({ createdAt: -1 });
+
+    const grouped = await Candidate.aggregate([
+      { $match: { isActive: true } },
+      { $group: { _id: '$pipelineStage', count: { $sum: 1 } } }
+    ]);
+
+    const pipeline = Object.fromEntries(grouped.map(item => [item._id, item.count]));
+
+    const listWithInvites = await Promise.all(
+      candidates.map(async (c) => {
+        const invite = await Invitation.findOne({ candidate: c._id });
+        return {
+          ...c.toObject(),
+          fullName: c.name,
+          phone: c.mobile,
+          position: c.jobRole?.name || 'Software Engineer',
+          invitation: invite ? {
+            id: invite._id,
+            code: invite.code,
+            active: invite.active !== false,
+            expiresAt: invite.expiresAt,
+            emailDelivery: {
+              status: invite.emailStatus || 'PENDING',
+              sentAt: invite.emailSentAt || null,
+              lastAttemptAt: invite.emailLastAttemptAt || null,
+              error: invite.emailFailureReason || null,
+            }
+          } : null,
+        };
+      })
+    );
+
+    res.status(200).json({
+      success: true,
+      generatedAt: new Date().toISOString(),
+      total: listWithInvites.length,
+      pipeline,
+      candidates: listWithInvites,
+      data: listWithInvites,
+    });
   } catch (error) {
     next(error);
   }
@@ -275,6 +327,39 @@ const handleDeleteAllCandidates = async (req, res, next) => {
 
 router.delete('/all', protectAdmin, handleDeleteAllCandidates);
 router.post('/delete-all', protectAdmin, handleDeleteAllCandidates);
+
+// Bulk Delete Selected candidates by IDs array
+router.post('/bulk-delete', protectAdmin, async (req, res, next) => {
+  try {
+    const { candidateIds } = req.body;
+    if (!Array.isArray(candidateIds) || candidateIds.length === 0) {
+      return res.status(400).json({ success: false, message: 'Array of candidateIds is required for bulk deletion' });
+    }
+
+    let deletedCount = 0;
+    for (const candidateId of candidateIds) {
+      const candidate = await Candidate.findById(candidateId);
+      if (candidate) {
+        await performCandidateDataCleanup(candidateId);
+        deletedCount++;
+      }
+    }
+
+    await AuditLog.create({
+      action: 'BULK_CANDIDATES_DELETE',
+      admin: req.admin._id,
+      newValue: { requested: candidateIds.length, deletedCount },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: `Successfully deleted ${deletedCount} candidate(s)`,
+      deletedCount,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 // Delete ONE candidate by ID
 router.delete('/:id', protectAdmin, async (req, res, next) => {
@@ -805,13 +890,74 @@ router.post('/:id/regenerate-code', protectAdmin, async (req, res, next) => {
 router.post('/:id/resend-email', protectAdmin, async (req, res, next) => {
   try {
     const candidateId = req.params.id;
+    const candidate = await Candidate.findById(candidateId);
+    if (!candidate) {
+      return res.status(404).json({ success: false, message: 'Candidate not found' });
+    }
+
     const invitationService = getInvitationService();
     const result = await invitationService.resendInvitation(candidateId, req.admin._id);
     
     if (result.success) {
-      res.status(200).json({ success: true, message: 'Invitation email resent successfully', emailStatus: result.emailStatus });
+      const msg = result.emailStatus === 'DEVELOPMENT_PREVIEW'
+        ? `Invitation email generated (Simulated in development mode for ${candidate.email})`
+        : `Invitation email sent successfully to ${candidate.email}`;
+      res.status(200).json({ 
+        success: true, 
+        message: msg, 
+        emailStatus: result.emailStatus,
+        emailSent: true,
+        candidateName: candidate.name,
+        candidateEmail: candidate.email
+      });
     } else {
-      res.status(500).json({ success: false, message: 'Failed to resend invitation email', error: result.error });
+      res.status(200).json({ 
+        success: false, 
+        emailSent: false,
+        message: `Failed to resend invitation email to ${candidate.email}: ${result.error || 'Mail delivery error'}. Please check SMTP/Brevo settings.`, 
+        error: result.error,
+        emailStatus: 'FAILED'
+      });
+    }
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Retry WhatsApp invitation independently
+router.post('/:id/retry-whatsapp', protectAdmin, async (req, res, next) => {
+  try {
+    const candidateId = req.params.id;
+    const candidate = await Candidate.findById(candidateId);
+    if (!candidate) {
+      return res.status(404).json({ success: false, message: 'Candidate not found' });
+    }
+
+    const invitation = await Invitation.findOne({ candidate: candidateId });
+    if (!invitation) {
+      return res.status(404).json({ success: false, message: 'No invitation record found for this candidate' });
+    }
+
+    const invitationService = getInvitationService();
+    const result = await invitationService.sendWhatsAppInvitation(invitation._id, req.admin._id);
+
+    if (result.success) {
+      res.status(200).json({
+        success: true,
+        message: `WhatsApp invitation sent successfully to ${candidate.mobile || candidate.phone || candidate.name}`,
+        whatsAppStatus: 'SENT',
+        whatsAppSent: true,
+      });
+    } else {
+      res.status(200).json({
+        success: false,
+        whatsAppSent: false,
+        whatsAppStatus: result.whatsAppStatus || 'CONFIGURATION_REQUIRED',
+        message: result.whatsAppStatus === 'CONFIGURATION_REQUIRED'
+          ? 'WhatsApp integration is implemented but real delivery is awaiting valid WhatsApp Business/Cloud API configuration.'
+          : `Failed to send WhatsApp message: ${result.error || 'WhatsApp delivery error'}`,
+        error: result.error,
+      });
     }
   } catch (error) {
     next(error);

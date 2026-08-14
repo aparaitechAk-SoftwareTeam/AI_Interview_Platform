@@ -23,23 +23,23 @@ export async function connectDB() {
     console.log(`✅ MongoDB Connected: ${mongoose.connection.name}`);
   } catch (err) {
     console.warn(`⚠️ MongoDB connection failed: ${err.message}`);
-    if (process.env.NODE_ENV === 'test') {
-      try {
-        if (mongoose.connection.readyState === 0) {
-          console.log('🔄 Attempting fallback to mongodb-memory-server...');
-          const { MongoMemoryServer } = await import('mongodb-memory-server');
-          const mongod = await MongoMemoryServer.create();
-          const memoryUri = mongod.getUri();
-          await mongoose.connect(memoryUri);
-          console.log('✅ Connected to MongoMemoryServer fallback at:', memoryUri);
-        }
-      } catch (memErr) {
-        console.error('❌ Failed to connect to MongoMemoryServer fallback:', memErr.message);
-        throw err;
+    try {
+      if (mongoose.connection.readyState === 0) {
+        console.log('🔄 Attempting fallback to mongodb-memory-server...');
+        const { MongoMemoryServer } = await import('mongodb-memory-server');
+        const mongod = await MongoMemoryServer.create();
+        const memoryUri = mongod.getUri();
+        await mongoose.connect(memoryUri);
+        console.log('✅ Connected to MongoMemoryServer fallback at:', memoryUri);
       }
-    } else {
-      console.error(`❌ FATAL: Database connection failed. Please ensure MongoDB is running and MONGODB_URI is correctly configured in .env. connection error: ${err.message}`);
-      process.exit(1);
+    } catch (memErr) {
+      console.error('❌ Failed to connect to MongoMemoryServer fallback:', memErr.message);
+      if (process.env.NODE_ENV === 'test') {
+        throw err;
+      } else {
+        console.error(`❌ FATAL: Database connection failed. Please ensure MongoDB is running or memory server is supported. Error: ${err.message}`);
+        process.exit(1);
+      }
     }
   }
 }

@@ -31,6 +31,7 @@ import ResultsPage from './admin/ResultsPage.jsx';
 import AnalyticsPage from './admin/AnalyticsPage.jsx';
 import NotificationsPage from './admin/NotificationsPage.jsx';
 import AuditLogPage from './admin/AuditLogPage.jsx';
+import SettingsPage from './admin/SettingsPage.jsx';
 
 // Candidate Pages
 import InvitePage from './candidate/InvitePage.jsx';
@@ -74,6 +75,7 @@ export default function App() {
                     <Route path="analytics" element={<ErrorBoundary title="Unable to load Analytics"><AnalyticsPage /></ErrorBoundary>} />
                     <Route path="notifications" element={<ErrorBoundary title="Unable to load Notifications"><NotificationsPage /></ErrorBoundary>} />
                     <Route path="audit-log" element={<ErrorBoundary title="Unable to load Audit Log"><AuditLogPage /></ErrorBoundary>} />
+                    <Route path="settings" element={<ErrorBoundary title="Unable to load Settings"><SettingsPage /></ErrorBoundary>} />
                     <Route path="*" element={<Navigate to="/admin/dashboard" replace />} />
                   </Routes>
                 </AdminLayout>

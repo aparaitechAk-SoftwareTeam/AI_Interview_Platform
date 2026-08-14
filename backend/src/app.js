@@ -28,6 +28,7 @@ import analyticsRoutes from './routes/analytics.js';
 import exportRoutes from './routes/exports.js';
 import auditLogRoutes from './routes/auditLog.js';
 import emailRoutes from './routes/email.js';
+import settingsRoutes from './routes/settings.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -74,7 +75,10 @@ app.use('/uploads', express.static(path.join(__dirname, '../uploads')));
 // Health check endpoint
 app.get('/api/health', async (req, res) => {
   const { getEmailService } = await import('./services/email/EmailService.js').catch(() => ({ getEmailService: () => ({ isConfigured: false }) }));
+  const { getWhatsAppService } = await import('./services/WhatsAppService.js').catch(() => ({ getWhatsAppService: () => ({ isConfigured: false }) }));
+  
   const emailService = getEmailService();
+  const whatsAppService = getWhatsAppService();
 
   let outboundIp = 'Unknown';
   try {
@@ -94,6 +98,8 @@ app.get('/api/health', async (req, res) => {
     environment: process.env.NODE_ENV || 'development',
     emailConfigured: emailService ? emailService.isConfigured : false,
     emailDiagnostic: emailService?.getDiagnosticInfo ? emailService.getDiagnosticInfo() : null,
+    whatsappConfigured: whatsAppService ? whatsAppService.isConfigured : false,
+    whatsappDiagnostic: whatsAppService?.getDiagnosticInfo ? whatsAppService.getDiagnosticInfo() : null,
     outboundIp,
     timestamp: new Date().toISOString(),
   });
@@ -102,9 +108,10 @@ app.get('/api/health', async (req, res) => {
 // Import mongoose so health check works
 import mongoose from 'mongoose';
 
-// Mounting routes
+// Mounting Primary /api Routes
 app.use('/api/admin/auth', adminAuthRoutes);
 app.use('/api/admin/dashboard', dashboardRoutes);
+app.use('/api/admin/settings', settingsRoutes);
 app.use('/api/candidates', candidateRoutes);
 app.use('/api/job-roles', jobRoleRoutes);
 app.use('/api/templates', templateRoutes);
@@ -124,6 +131,16 @@ app.use('/api/analytics', analyticsRoutes);
 app.use('/api/exports', exportRoutes);
 app.use('/api/audit-log', auditLogRoutes);
 app.use('/api/admin/email', emailRoutes);
+
+// Dual /api/v1 Route Aliases for Application & Mobile client compatibility
+app.use('/api/v1/auth', adminAuthRoutes);
+app.use('/api/v1/admin/dashboard', dashboardRoutes);
+app.use('/api/v1/admin/settings', settingsRoutes);
+app.use('/api/v1/admin/candidates', candidateRoutes);
+app.use('/api/v1/admin', candidateRoutes);
+app.use('/api/v1/candidates', candidateRoutes);
+app.use('/api/v1/invitations', invitationRoutes);
+app.use('/api/v1/interviews', interviewRoutes);
 
 // General error handling middleware
 app.use(errorHandler);

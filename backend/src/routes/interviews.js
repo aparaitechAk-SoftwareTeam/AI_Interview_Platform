@@ -12,6 +12,7 @@ import { getLLMProvider } from '../services/ai/index.js';
 import { getSpeechProvider } from '../services/speech/index.js';
 import { getStorageProvider } from '../services/storage/index.js';
 import { protectAdmin } from '../middleware/auth.js';
+import { getInterviewSettings } from './settings.js';
 
 const router = express.Router();
 const upload = multer({ storage: multer.memoryStorage() });
@@ -83,12 +84,15 @@ router.post('/start', async (req, res, next) => {
     await candidate.save();
 
     // Create new interview session
+    const globalSettings = await getInterviewSettings();
+    const sessionDuration = candidate.duration || globalSettings?.durationMinutes || 5;
+
     const session = await InterviewSession.create({
       candidate: candidate._id,
       jobRole: candidate.jobRole._id,
       campaign: candidate.campaign,
       template: candidate.template?._id,
-      duration: candidate.duration || 5,
+      duration: sessionDuration,
       status: 'STARTED',
       startedAt: new Date(),
       attemptNumber: candidate.attemptsCount,
@@ -100,7 +104,7 @@ router.post('/start', async (req, res, next) => {
       candidate: candidate._id,
       lastCompletedQuestionIndex: -1,
       aiContext: { strategyApproved: true },
-      remainingTimeSeconds: (candidate.duration || 5) * 60,
+      remainingTimeSeconds: sessionDuration * 60,
       difficulty: candidate.template?.difficulty || '3',
     });
 
@@ -567,6 +571,262 @@ router.post('/:id/terminate', protectAdmin, async (req, res, next) => {
     }
 
     res.status(200).json({ success: true, message: 'Interview terminated by Admin', data: session });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// @desc    Log candidate event evidence (App background, focus lost, back button, tab switch, etc.)
+// @route   POST /api/interviews/:id/events
+router.post('/:id/events', async (req, res, next) => {
+  try {
+    const { type, timestamp, durationMs, metadata } = req.body;
+    const sessionId = req.params.id;
+
+    const session = await InterviewSession.findById(sessionId);
+    if (!session) {
+      return res.status(404).json({ success: false, message: 'Interview session not found' });
+    }
+
+    // Save event to session warning logs & emit socket event
+    const eventObj = {
+      type: type || 'UNKNOWN_EVENT',
+      timestamp: timestamp ? new Date(timestamp) : new Date(),
+      durationMs: durationMs || 0,
+      metadata: metadata || {},
+    };
+
+    if (global.io) {
+      global.io.to('admin_monitoring').emit('admin_live_update', {
+        interviewId: session._id,
+        candidateName: session.candidate ? session.candidate.name : 'Candidate',
+        state: 'INTEGRITY_ALERT',
+        details: `Event logged: ${eventObj.type}`,
+        event: eventObj,
+      });
+    }
+
+    res.status(201).json({ success: true, event: eventObj });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// @desc    Get current interview state / recovery info
+// @route   GET /api/interviews/:id/current
+router.get('/:id/current', async (req, res, next) => {
+  try {
+    const session = await InterviewSession.findById(req.params.id).populate('candidate');
+    if (!session) {
+      return res.status(404).json({ success: false, message: 'Session not found' });
+    }
+    const checkpoint = await InterviewCheckpoint.findOne({ interviewSession: session._id });
+    res.status(200).json({ success: true, interview: session, session, checkpoint });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Import InterviewRecording for video chunk storage
+import InterviewRecording from '../models/InterviewRecording.js';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const uploadsDir = path.join(__dirname, '../../uploads/recordings');
+
+if (!fs.existsSync(uploadsDir)) {
+  fs.mkdirSync(uploadsDir, { recursive: true });
+}
+
+// @desc    Upload video/audio recording chunk
+// @route   POST /api/interviews/:id/recording/chunks
+router.post('/:id/recording/chunks', upload.single('chunk'), async (req, res, next) => {
+  try {
+    const interviewId = req.params.id;
+    const chunkIndex = parseInt(req.body.index || req.body.chunkIndex || '0');
+    const totalChunks = parseInt(req.body.totalChunks || '1');
+
+    let recording = await InterviewRecording.findOne({
+      $or: [{ interviewSession: interviewId }, { interviewId: interviewId }],
+    });
+
+    if (!recording) {
+      const session = await InterviewSession.findById(interviewId);
+      recording = await InterviewRecording.create({
+        interviewSession: interviewId,
+        interviewId,
+        candidate: session ? session.candidate : null,
+        candidateId: session ? session.candidate : null,
+        qaIndex: 0,
+        path: '',
+        status: 'UPLOADING',
+        expectedChunks: totalChunks,
+      });
+    }
+
+    if (req.file) {
+      const chunkFileName = `rec-${interviewId}-${chunkIndex}.part`;
+      const chunkFilePath = path.join(uploadsDir, chunkFileName);
+      fs.writeFileSync(chunkFilePath, req.file.buffer);
+
+      recording.chunks.push({
+        index: chunkIndex,
+        size: req.file.size,
+        uploadedAt: new Date(),
+      });
+      recording.status = 'UPLOADING';
+      await recording.save();
+    }
+
+    res.status(200).json({ success: true, chunkIndex, status: recording.status });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// @desc    Get video recording status
+// @route   GET /api/interviews/:id/recording/status
+router.get('/:id/recording/status', async (req, res, next) => {
+  try {
+    const interviewId = req.params.id;
+    const recording = await InterviewRecording.findOne({
+      $or: [{ interviewSession: interviewId }, { interviewId: interviewId }],
+    });
+    if (!recording) {
+      return res.status(200).json({ success: true, status: 'NOT_FOUND', recording: null });
+    }
+    res.status(200).json({ success: true, status: recording.status, recording });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// @desc    Finalize video/audio recording
+// @route   POST /api/interviews/:id/recording/finalize
+router.post('/:id/recording/finalize', async (req, res, next) => {
+  try {
+    const interviewId = req.params.id;
+    let recording = await InterviewRecording.findOne({
+      $or: [{ interviewSession: interviewId }, { interviewId: interviewId }],
+    });
+
+    if (!recording) {
+      const session = await InterviewSession.findById(interviewId);
+      recording = await InterviewRecording.create({
+        interviewSession: interviewId,
+        interviewId,
+        candidate: session ? session.candidate : null,
+        candidateId: session ? session.candidate : null,
+        qaIndex: 0,
+        path: '',
+        status: 'READY',
+      });
+    }
+
+    // Assemble final recording file
+    const finalFileName = `interview-${interviewId}.webm`;
+    const finalFilePath = path.join(uploadsDir, finalFileName);
+
+    const sortedChunks = (recording.chunks || []).sort((a, b) => a.index - b.index);
+    if (sortedChunks.length > 0) {
+      const writeStream = fs.createWriteStream(finalFilePath);
+      for (const chunk of sortedChunks) {
+        const partPath = path.join(uploadsDir, `rec-${interviewId}-${chunk.index}.part`);
+        if (fs.existsSync(partPath)) {
+          const buffer = fs.readFileSync(partPath);
+          writeStream.write(buffer);
+          try { fs.unlinkSync(partPath); } catch (e) {}
+        }
+      }
+      writeStream.end();
+    }
+
+    recording.status = 'READY';
+    recording.path = `/uploads/recordings/${finalFileName}`;
+    recording.storageKey = finalFilePath;
+    recording.finalizedAt = new Date();
+    await recording.save();
+
+    res.status(200).json({ success: true, status: 'READY', path: recording.path, recording });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// @desc    Stream video recording (HTTP 206 Range Stream for Admin Video Playback)
+// @route   GET /api/interviews/:id/recording
+router.get('/:id/recording', async (req, res, next) => {
+  try {
+    const interviewId = req.params.id;
+    const recording = await InterviewRecording.findOne({
+      $or: [{ interviewSession: interviewId }, { interviewId: interviewId }],
+    }).select('+storageKey');
+
+    let videoPath = recording?.storageKey || (recording?.path ? path.join(__dirname, '../../', recording.path) : null);
+    if (!videoPath || !fs.existsSync(videoPath)) {
+      const defaultVideo = path.join(uploadsDir, `interview-${interviewId}.webm`);
+      if (fs.existsSync(defaultVideo)) {
+        videoPath = defaultVideo;
+      } else {
+        return res.status(404).json({ success: false, message: 'Proctoring recording not available' });
+      }
+    }
+
+    const stat = fs.statSync(videoPath);
+    const fileSize = stat.size;
+    const range = req.headers.range;
+
+    if (range) {
+      const parts = range.replace(/bytes=/, '').split('-');
+      const start = parseInt(parts[0], 10);
+      const end = parts[1] ? parseInt(parts[1], 10) : fileSize - 1;
+      const chunksize = end - start + 1;
+      const file = fs.createReadStream(videoPath, { start, end });
+      const head = {
+        'Content-Range': `bytes ${start}-${end}/${fileSize}`,
+        'Accept-Ranges': 'bytes',
+        'Content-Length': chunksize,
+        'Content-Type': recording?.mimeType || 'video/webm',
+      };
+      res.writeHead(206, head);
+      file.pipe(res);
+    } else {
+      const head = {
+        'Content-Length': fileSize,
+        'Content-Type': recording?.mimeType || 'video/webm',
+      };
+      res.writeHead(200, head);
+      fs.createReadStream(videoPath).pipe(res);
+    }
+  } catch (error) {
+    next(error);
+  }
+});
+
+// @desc    Delete video recording (Admin action)
+// @route   DELETE /api/interviews/:id/recording
+router.delete('/:id/recording', protectAdmin, async (req, res, next) => {
+  try {
+    const interviewId = req.params.id;
+    const recording = await InterviewRecording.findOne({
+      $or: [{ interviewSession: interviewId }, { interviewId: interviewId }],
+    }).select('+storageKey');
+
+    if (recording) {
+      recording.status = 'DELETED';
+      recording.deletedAt = new Date();
+      recording.deleteReason = 'Deleted by administrator';
+      await recording.save();
+
+      if (recording.storageKey && fs.existsSync(recording.storageKey)) {
+        try { fs.unlinkSync(recording.storageKey); } catch (e) {}
+      }
+    }
+
+    res.status(200).json({ success: true, message: 'Recording deleted successfully' });
   } catch (error) {
     next(error);
   }

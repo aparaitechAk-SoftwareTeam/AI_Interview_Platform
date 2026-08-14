@@ -44,12 +44,16 @@ export default function CandidatesPage() {
     const cand = list.find(c => c._id === candidateId);
     const emailStr = cand ? ` to ${cand.email}` : '';
     try {
-      await candidates.resendEmail(candidateId);
-      alert(`Invitation email sent successfully${emailStr}.`);
+      const res = await candidates.resendEmail(candidateId);
+      if (res.data?.success) {
+        alert(res.data.message || `Invitation email sent successfully${emailStr}.`);
+      } else {
+        alert(res.data?.message || `Failed to send invitation email${emailStr}. Please check email settings.`);
+      }
       fetchData();
     } catch (err) {
       console.error(err);
-      alert('Failed to send invitation email. Please try again.');
+      alert(err.response?.data?.message || 'Failed to send invitation email. Please try again.');
     }
   };
 

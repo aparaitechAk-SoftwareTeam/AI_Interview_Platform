@@ -42,8 +42,11 @@ class InvitationService {
    * Builds the secure interview invitation link
    */
   buildInterviewLink(linkToken) {
-    const frontendUrl = process.env.FRONTEND_URL || 'http://localhost:5173';
-    return `${frontendUrl}/interview/invite/${linkToken}`;
+    const portalUrl = (process.env.CANDIDATE_PORTAL_URL || process.env.FRONTEND_URL || 'http://localhost:5173').trim();
+    if (portalUrl.includes('/interview')) {
+      return `${portalUrl.replace(/\/$/, '')}/invite/${linkToken}`;
+    }
+    return `${portalUrl.replace(/\/$/, '')}/interview/invite/${linkToken}`;
   }
 
   /**
@@ -252,6 +255,66 @@ class InvitationService {
     });
 
     return invitation;
+  }
+
+  /**
+   * Dispatches WhatsApp invitation message independently
+   */
+  async sendWhatsAppInvitation(invitationId, adminId = null) {
+    const { getWhatsAppService } = await import('./WhatsAppService.js');
+    const invitation = await Invitation.findById(invitationId).populate({
+      path: 'candidate',
+      populate: { path: 'jobRole' },
+    });
+
+    if (!invitation) {
+      throw new Error('Invitation record not found');
+    }
+
+    const candidate = invitation.candidate;
+    if (!candidate) {
+      throw new Error('Candidate not found for invitation');
+    }
+
+    const whatsAppService = getWhatsAppService();
+    const interviewUrl = this.buildInterviewLink(invitation.linkToken);
+
+    invitation.whatsAppLastAttemptAt = new Date();
+    invitation.whatsAppAttemptCount = (invitation.whatsAppAttemptCount || 0) + 1;
+
+    const result = await whatsAppService.sendInvitationWhatsApp(
+      candidate,
+      invitation.code,
+      interviewUrl
+    );
+
+    if (result.success) {
+      invitation.whatsAppStatus = 'SENT';
+      invitation.whatsAppSentAt = new Date();
+      invitation.whatsAppFailureReason = undefined;
+      invitation.whatsAppDelivery = {
+        status: 'SENT',
+        sentAt: new Date(),
+        lastAttemptAt: new Date(),
+        messageId: result.messageId,
+      };
+    } else {
+      invitation.whatsAppStatus = result.status || 'FAILED';
+      invitation.whatsAppFailureReason = result.error || 'WhatsApp delivery error';
+      invitation.whatsAppDelivery = {
+        status: result.status || 'FAILED',
+        lastAttemptAt: new Date(),
+        error: result.error,
+      };
+    }
+
+    await invitation.save();
+    return {
+      success: result.success,
+      whatsAppStatus: invitation.whatsAppStatus,
+      messageId: result.messageId,
+      error: result.error,
+    };
   }
 }
 
