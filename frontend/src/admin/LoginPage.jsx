@@ -1,10 +1,10 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useAdminAuth } from '../context/AdminAuthContext.jsx';
 import { Bot, Eye, EyeOff, Loader } from 'lucide-react';
 
 export default function AdminLogin() {
-  const { login } = useAdminAuth();
+  const { admin, login } = useAdminAuth();
   const navigate = useNavigate();
   const [form, setForm] = useState({ email: '', password: '' });
   const [showPw, setShowPw] = useState(false);
@@ -13,13 +13,19 @@ export default function AdminLogin() {
   const [emailType, setEmailType] = useState('text');
   const [passType, setPassType] = useState('text');
 
+  useEffect(() => {
+    if (admin) {
+      navigate('/admin/dashboard', { replace: true });
+    }
+  }, [admin, navigate]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     setError('');
     setLoading(true);
     try {
       await login(form.email, form.password);
-      navigate('/admin/dashboard');
+      navigate('/admin/dashboard', { replace: true });
     } catch (err) {
       setError(err.response?.data?.message || 'Login failed. Check credentials.');
     } finally {

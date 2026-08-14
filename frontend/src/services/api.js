@@ -10,7 +10,7 @@ API.interceptors.request.use((config) => {
   const adminToken = localStorage.getItem('adminToken');
   const candidateToken = localStorage.getItem('candidateToken');
 
-  if (adminToken && config.url.startsWith('/admin') || config.url.match(/^\/(candidates|job-roles|templates|question-bank|campaigns|reports|results|analytics|exports|audit-log)/)) {
+  if (adminToken && (config.url.startsWith('/admin') || config.url.match(/^\/(candidates|job-roles|templates|question-bank|campaigns|reports|results|analytics|exports|audit-log)/))) {
     config.headers.Authorization = `Bearer ${adminToken}`;
   } else if (candidateToken) {
     config.headers.Authorization = `Bearer ${candidateToken}`;

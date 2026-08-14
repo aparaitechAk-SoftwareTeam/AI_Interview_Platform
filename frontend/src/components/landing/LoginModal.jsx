@@ -5,8 +5,8 @@ import { useAdminAuth } from '../../context/AdminAuthContext.jsx';
 export default function LoginModal({ isOpen, onClose }) {
   const navigate = useNavigate();
   const { login } = useAdminAuth();
-  const [email, setEmail] = useState('admin@aiinterview.com');
-  const [password, setPassword] = useState('AdminPassword123!');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
   if (!isOpen) return null;
@@ -17,7 +17,7 @@ export default function LoginModal({ isOpen, onClose }) {
     try {
       await login(email, password);
       onClose();
-      navigate('/admin/dashboard');
+      navigate('/admin/dashboard', { replace: true });
     } catch (err) {
       console.error(err);
     } finally {
@@ -81,7 +81,7 @@ export default function LoginModal({ isOpen, onClose }) {
               required
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="admin@aiinterview.com"
+              placeholder="Enter your email"
               style={{
                 width: '100%',
                 padding: '12px 16px',
@@ -101,7 +101,7 @@ export default function LoginModal({ isOpen, onClose }) {
               required
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="••••••••"
+              placeholder="Enter your password"
               style={{
                 width: '100%',
                 padding: '12px 16px',
