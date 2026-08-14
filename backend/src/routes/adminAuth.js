@@ -17,7 +17,8 @@ router.post('/login', async (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Please provide email and password' });
     }
 
-    const admin = await Admin.findOne({ email });
+    const normalizedEmail = (email || '').toLowerCase().trim();
+    const admin = await Admin.findOne({ email: normalizedEmail });
     if (!admin || !(await admin.comparePassword(password))) {
       return res.status(401).json({ success: false, message: 'Invalid email or password' });
     }
