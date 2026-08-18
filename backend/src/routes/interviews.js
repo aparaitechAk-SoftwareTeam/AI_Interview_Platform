@@ -269,7 +269,7 @@ router.post('/next-question', async (req, res, next) => {
 // @route   POST /api/interviews/submit-answer
 router.post('/submit-answer', upload.single('audio'), async (req, res, next) => {
   try {
-    const { sessionId, questionIndex, remainingTimeSeconds } = req.body;
+    const { sessionId, questionIndex, remainingTimeSeconds, typedAnswer, transcriptText } = req.body;
     if (!sessionId || questionIndex === undefined) {
       return res.status(400).json({ success: false, message: 'Session ID and question index are required' });
     }
@@ -296,9 +296,9 @@ router.post('/submit-answer', upload.single('audio'), async (req, res, next) => 
       recordingPath = uploadResult.path;
     }
 
-    // 2. Run STT Transcription
-    let transcript = 'No spoken response detected.';
-    if (req.file) {
+    // 2. STT Transcription or Typed Answer resolution
+    let transcript = (typedAnswer || transcriptText || '').trim();
+    if (!transcript && req.file) {
       try {
         const speech = getSpeechProvider();
         transcript = await speech.speechToText(req.file.buffer);
@@ -306,6 +306,9 @@ router.post('/submit-answer', upload.single('audio'), async (req, res, next) => 
         console.error('[Speech] STT transcription failed, using fallback transcript:', sttErr);
         transcript = 'Transcribed response fallback based on mock speech handler.';
       }
+    }
+    if (!transcript) {
+      transcript = 'No response provided.';
     }
 
     // 3. Perform AI grading

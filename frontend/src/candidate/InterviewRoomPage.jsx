@@ -5,7 +5,7 @@ import Webcam from 'react-webcam';
 import { interviews } from '../services/api.js';
 import {
   Mic, Square, Send, Monitor, AlertTriangle, ShieldAlert,
-  Clock, Play, Pause, Bot, Camera, Sparkles, CheckCircle2, User, Loader
+  Clock, Play, Pause, Bot, Camera, Sparkles, CheckCircle2, User, Loader, FileText
 } from 'lucide-react';
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:4000';
@@ -25,6 +25,10 @@ export default function InterviewRoomPage() {
   const [timeLeft, setTimeLeft] = useState(0);
   const [warningMsg, setWarningMsg] = useState('');
   
+  // Dual Input Mode state: 'voice' | 'text'
+  const [answerMode, setAnswerMode] = useState('voice');
+  const [typedAnswerText, setTypedAnswerText] = useState('');
+
   // Speech-to-text state
   const [liveTranscript, setLiveTranscript] = useState('');
   const [interimTranscript, setInterimTranscript] = useState('');
@@ -253,7 +257,7 @@ export default function InterviewRoomPage() {
     }
   };
 
-  async function performSubmitAnswer(blobToSubmit, transcriptText) {
+  async function performSubmitAnswer(blobToSubmit, transcriptText, options = {}) {
     if (isSubmittingRef.current || !session || !currentQuestion) return;
     isSubmittingRef.current = true;
 
@@ -268,22 +272,27 @@ export default function InterviewRoomPage() {
 
     setSendingAnswer(true);
     setAiState('PROCESSING');
-    setAiText('Processing response and analyzing transcript...');
+    setAiText('Processing response and analyzing answer...');
     const idempotencyKey = crypto.randomUUID();
 
     try {
-      const responseFile = new File([blobToSubmit], 'response.wav', { type: 'audio/wav' });
+      const responseFile = blobToSubmit
+        ? new File([blobToSubmit], 'response.wav', { type: 'audio/wav' })
+        : new File([new Blob([], { type: 'audio/wav' })], 'response.wav', { type: 'audio/wav' });
+
       await interviews.submitAnswer({
         sessionId: session._id,
         questionIndex: currentQuestion.questionIndex,
         remainingTimeSeconds: timeLeft,
         audioBlob: responseFile,
+        typedAnswer: options.typedAnswer || undefined,
         idempotencyKey,
       });
 
-      // Reset transcripts
+      // Reset transcripts and typed answer
       setLiveTranscript('');
       setInterimTranscript('');
+      setTypedAnswerText('');
 
       // Get next question
       const res = await interviews.nextQuestion(session._id);
@@ -314,6 +323,13 @@ export default function InterviewRoomPage() {
       setSendingAnswer(false);
     }
   }
+
+  const handleTypedSubmit = async () => {
+    const textToSubmit = typedAnswerText.trim();
+    if (!textToSubmit) return;
+    const dummyBlob = new Blob([], { type: 'audio/wav' });
+    await performSubmitAnswer(dummyBlob, textToSubmit, { typedAnswer: textToSubmit });
+  };
 
   const startSpeech = useCallback(() => {
     if (isTtsPlayingRef.current) return;
@@ -639,37 +655,114 @@ export default function InterviewRoomPage() {
               <strong>Finalizing Assessment... Please do not close this window.</strong>
             </div>
           ) : (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
-              {!recording && !audioUrl ? (
-                // Only show Record Answer if session is STARTED/RECOVERING, question is loaded, and AI is done speaking
-                (session?.status === 'STARTED' || session?.status === 'RECOVERING') && currentQuestion && aiState !== 'SPEAKING' && aiState !== 'PROCESSING' ? (
-                  <button className="btn btn-primary" disabled style={{ flex: 1, padding: '0.875rem', opacity: 0.8, cursor: 'not-allowed' }}>
-                    <Mic size={18} style={{ marginRight: '0.5rem' }} /> Listening for your answer...
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '1.25rem' }}>
+              {/* Answer Mode Toggle Bar */}
+              {(session?.status === 'STARTED' || session?.status === 'RECOVERING') && currentQuestion && (
+                <div style={{ display: 'flex', gap: '0.75rem', background: '#09090c', padding: '0.35rem', borderRadius: 12, border: '1px solid #1f1f28' }}>
+                  <button
+                    type="button"
+                    onClick={() => setAnswerMode('voice')}
+                    style={{
+                      flex: 1, padding: '0.6rem 1rem', borderRadius: 8, fontSize: '0.85rem', fontWeight: 600,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
+                      cursor: 'pointer', transition: 'all 0.2s ease', border: 'none',
+                      background: answerMode === 'voice' ? 'var(--primary)' : 'transparent',
+                      color: answerMode === 'voice' ? '#fff' : '#9ca3af',
+                    }}
+                  >
+                    <Mic size={16} /> Answer by Voice
                   </button>
-                ) : (aiState === 'SPEAKING' || aiState === 'PROCESSING') ? (
-                  <div style={{ flex: 1, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: '0.95rem', fontStyle: 'italic', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
-                    <Sparkles size={16} className="animate-spin" />
-                    {aiState === 'SPEAKING' ? 'AI is speaking the question... Please listen.' : 'AI is processing response... Please wait.'}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      stopSpeech();
+                      setAnswerMode('text');
+                    }}
+                    style={{
+                      flex: 1, padding: '0.6rem 1rem', borderRadius: 8, fontSize: '0.85rem', fontWeight: 600,
+                      display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem',
+                      cursor: 'pointer', transition: 'all 0.2s ease', border: 'none',
+                      background: answerMode === 'text' ? 'var(--primary)' : 'transparent',
+                      color: answerMode === 'text' ? '#fff' : '#9ca3af',
+                    }}
+                  >
+                    <FileText size={16} /> Answer by Typing
+                  </button>
+                </div>
+              )}
+
+              {/* Mode Body */}
+              {answerMode === 'text' ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.875rem' }}>
+                  <div style={{ position: 'relative' }}>
+                    <textarea
+                      rows={5}
+                      value={typedAnswerText}
+                      disabled={sendingAnswer || aiState === 'PROCESSING' || aiState === 'SPEAKING'}
+                      onChange={(e) => setTypedAnswerText(e.target.value)}
+                      placeholder="Type your detailed response here..."
+                      style={{
+                        width: '100%', background: '#070709', color: '#fff', border: '1px solid #272738',
+                        borderRadius: 12, padding: '1rem', fontSize: '0.95rem', lineHeight: '1.5',
+                        resize: 'vertical', fontFamily: 'inherit', outline: 'none',
+                      }}
+                    />
+                    <div style={{ fontSize: '0.75rem', color: '#6b7280', textAlign: 'right', marginTop: '0.25rem' }}>
+                      {typedAnswerText.trim().length} characters
+                    </div>
                   </div>
-                ) : null
-              ) : recording ? (
-                <button className="btn btn-danger" disabled style={{ flex: 1, padding: '0.875rem', opacity: 0.8, cursor: 'not-allowed' }}>
-                  <Square size={18} style={{ marginRight: '0.5rem' }} /> Recording Answer... (Silence Detection Active)
-                </button>
+                  <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '0.75rem' }}>
+                    <button
+                      className="btn btn-primary"
+                      disabled={!typedAnswerText.trim() || sendingAnswer || aiState === 'PROCESSING' || isSubmittingRef.current}
+                      onClick={handleTypedSubmit}
+                      style={{ padding: '0.75rem 1.75rem', fontSize: '0.95rem', borderRadius: 10, display: 'flex', alignItems: 'center', gap: '0.5rem' }}
+                    >
+                      {sendingAnswer ? (
+                        <>
+                          <Loader size={16} className="animate-spin" /> Evaluating Answer...
+                        </>
+                      ) : (
+                        <>
+                          <Send size={16} /> Submit Answer
+                        </>
+                      )}
+                    </button>
+                  </div>
+                </div>
               ) : (
-                <div style={{ display: 'flex', gap: '1rem', width: '100%' }}>
-                  <div style={{ flex: 1, background: 'rgba(37,99,235,0.1)', border: '1px solid var(--primary)', borderRadius: 8, padding: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)' }}>
-                    <Loader size={16} className="animate-spin" style={{ marginRight: '0.5rem' }} />
-                    Auto-submitting answer...
-                  </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '1rem' }}>
+                  {!recording && !audioUrl ? (
+                    (session?.status === 'STARTED' || session?.status === 'RECOVERING') && currentQuestion && aiState !== 'SPEAKING' && aiState !== 'PROCESSING' ? (
+                      <button className="btn btn-primary" disabled style={{ flex: 1, padding: '0.875rem', opacity: 0.8, cursor: 'not-allowed' }}>
+                        <Mic size={18} style={{ marginRight: '0.5rem' }} /> Listening for your answer...
+                      </button>
+                    ) : (aiState === 'SPEAKING' || aiState === 'PROCESSING') ? (
+                      <div style={{ flex: 1, textAlign: 'center', color: 'var(--text-tertiary)', fontSize: '0.95rem', fontStyle: 'italic', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.5rem' }}>
+                        <Sparkles size={16} className="animate-spin" />
+                        {aiState === 'SPEAKING' ? 'AI is speaking the question... Please listen.' : 'AI is processing response... Please wait.'}
+                      </div>
+                    ) : null
+                  ) : recording ? (
+                    <button className="btn btn-danger" disabled style={{ flex: 1, padding: '0.875rem', opacity: 0.8, cursor: 'not-allowed' }}>
+                      <Square size={18} style={{ marginRight: '0.5rem' }} /> Recording Answer... (Silence Detection Active)
+                    </button>
+                  ) : (
+                    <div style={{ display: 'flex', gap: '1rem', width: '100%' }}>
+                      <div style={{ flex: 1, background: 'rgba(37,99,235,0.1)', border: '1px solid var(--primary)', borderRadius: 8, padding: '0.75rem', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--primary)' }}>
+                        <Loader size={16} className="animate-spin" style={{ marginRight: '0.5rem' }} />
+                        Auto-submitting answer...
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>
           )}
         </div>
 
-        {/* Live Speech-to-Text Transcript */}
-        {!starting && aiState !== 'COMPLETED' && (
+        {/* Live Speech-to-Text Transcript (Visible when Voice Mode is active) */}
+        {!starting && aiState !== 'COMPLETED' && answerMode === 'voice' && (
           <div style={{ marginTop: '1rem', borderTop: '1px solid #1f1f28', paddingTop: '1rem' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
               <span style={{ fontSize: '0.75rem', color: '#6b7280', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 }}>

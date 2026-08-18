@@ -155,6 +155,9 @@ export const interviews = {
     formData.append('sessionId', data.sessionId);
     formData.append('questionIndex', data.questionIndex);
     formData.append('remainingTimeSeconds', data.remainingTimeSeconds || 0);
+    if (data.typedAnswer) {
+      formData.append('typedAnswer', data.typedAnswer);
+    }
     if (data.audioBlob) {
       formData.append('audio', data.audioBlob, `answer-${data.questionIndex}.webm`);
     }
