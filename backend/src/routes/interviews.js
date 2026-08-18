@@ -36,39 +36,51 @@ router.post('/start', async (req, res, next) => {
       return res.status(403).json({ success: false, message: 'Interview link has expired' });
     }
 
-    // Attempt Recovery (only for active uncompleted sessions that have existing Q&A history)
-    const checkpoint = await InterviewCheckpoint.findOne({ candidate: candidate._id });
-    if (checkpoint) {
-      const activeSession = await InterviewSession.findById(checkpoint.interviewSession);
-      if (activeSession && activeSession.status !== 'COMPLETED' && activeSession.status !== 'TERMINATED' && activeSession.qa && activeSession.qa.length > 0) {
-        activeSession.status = 'RECOVERING';
-        await activeSession.save();
+    // Attempt Recovery for active uncompleted sessions
+    const activeSession = await InterviewSession.findOne({
+      candidate: candidate._id,
+      status: { $in: ['STARTED', 'IN_PROGRESS', 'RECOVERING'] },
+    });
 
+    if (activeSession) {
+      activeSession.status = 'RECOVERING';
+      await activeSession.save();
+
+      let checkpoint = await InterviewCheckpoint.findOne({ candidate: candidate._id });
+      if (!checkpoint) {
+        checkpoint = await InterviewCheckpoint.create({
+          interviewSession: activeSession._id,
+          candidate: candidate._id,
+          lastCompletedQuestionIndex: activeSession.qa ? activeSession.qa.length - 1 : -1,
+          aiContext: { strategyApproved: true },
+          remainingTimeSeconds: (activeSession.duration || 5) * 60,
+        });
+      }
+
+      let currentQuestion = null;
+      if (activeSession.qa && activeSession.qa.length > 0) {
         const currentQa = activeSession.qa[activeSession.qa.length - 1];
-        const currentQuestion = {
+        currentQuestion = {
           questionIndex: activeSession.qa.length - 1,
           text: currentQa.question,
           category: currentQa.category || 'technical',
           topic: currentQa.topic || 'General',
           difficulty: currentQa.difficulty || '3',
         };
-
-        return res.status(200).json({
-          success: true,
-          data: {
-            session: activeSession,
-            checkpoint: checkpoint,
-            question: currentQuestion,
-            recovered: true,
-          }
-        });
-      } else {
-        // Delete stale/completed checkpoint to allow clean new session creation
-        await InterviewCheckpoint.deleteOne({ _id: checkpoint._id });
       }
+
+      return res.status(200).json({
+        success: true,
+        data: {
+          session: activeSession,
+          checkpoint: checkpoint,
+          question: currentQuestion,
+          recovered: true,
+        }
+      });
     }
 
-    // Prevent starting if limit is exceeded
+    // Prevent starting a NEW session if max attempts limit is exceeded
     if (candidate.attemptsCount >= candidate.maxAttempts) {
       return res.status(403).json({ success: false, message: 'Maximum interview attempts reached' });
     }
