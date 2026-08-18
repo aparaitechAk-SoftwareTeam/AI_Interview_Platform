@@ -1,11 +1,11 @@
-import React, { useEffect, useState, useRef } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { io } from 'socket.io-client';
 import Webcam from 'react-webcam';
 import { interviews } from '../services/api.js';
 import {
   Mic, Square, Send, Monitor, AlertTriangle, ShieldAlert,
-  Clock, Play, Pause, Bot, Camera, Sparkles, CheckCircle2, User
+  Clock, Play, Pause, Bot, Camera, Sparkles, CheckCircle2, User, Loader
 } from 'lucide-react';
 
 const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || 'http://localhost:4000';
@@ -51,6 +51,19 @@ export default function InterviewRoomPage() {
   const invitationId = sessionStorage.getItem('invitationId');
   const candidateId = sessionStorage.getItem('candidateId');
   const candidateName = sessionStorage.getItem('candidateName') || 'Candidate';
+
+  // Speech-to-text controls
+  const stopSpeech = useCallback(() => {
+    listeningWanted.current = false;
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch (err) {
+        console.error('stopSpeech error:', err);
+      }
+    }
+    setListening(false);
+  }, []);
 
   // 1. Initialize Interview Session & Integrity Watchers
   useEffect(() => {
@@ -218,19 +231,6 @@ export default function InterviewRoomPage() {
     const secs = seconds % 60;
     return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
   };
-
-  // Speech-to-text controls
-  const stopSpeech = useCallback(() => {
-    listeningWanted.current = false;
-    if (recognitionRef.current) {
-      try {
-        recognitionRef.current.stop();
-      } catch (err) {
-        console.error('stopSpeech error:', err);
-      }
-    }
-    setListening(false);
-  }, []);
 
   const resetSilenceTimer = useCallback(() => {
     if (silenceTimerRef.current) {
